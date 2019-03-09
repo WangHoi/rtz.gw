@@ -1,0 +1,155 @@
+#include "log.h"
+#include "macro_util.h"
+#include "mpsc_queue.h"
+#include "sbuf.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+#include <sys/time.h>
+#include <sys/eventfd.h>
+#include <time.h>
+#include <pthread.h>
+#include <assert.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+#define ANSI_COLOR_RED     "\x1b[31m"
+#define ANSI_COLOR_GREEN   "\x1b[32m"
+#define ANSI_COLOR_YELLOW  "\x1b[33m"
+#define ANSI_COLOR_BLUE    "\x1b[34m"
+#define ANSI_COLOR_MAGENTA "\x1b[35m"
+#define ANSI_COLOR_CYAN    "\x1b[36m"
+#define ANSI_COLOR_RESET   "\x1b[0m"
+
+enum {
+    LOG_MSG_DATA = 1,
+    LOG_MSG_EXIT = 2,
+};
+
+enum {
+    INITIAL_BUFSZ = 2000,
+};
+
+static const char *LL_LEVEL_NAMES[] = {
+	ANSI_COLOR_MAGENTA " FATAL " ANSI_COLOR_RESET,
+    ANSI_COLOR_RED " ERROR " ANSI_COLOR_RESET,
+    ANSI_COLOR_YELLOW " WARN " ANSI_COLOR_RESET,
+	" ", // INFO
+	" ", // DEBUG
+	" ", // TRACE
+};
+_Static_assert(ARRAY_SIZE(LL_LEVEL_NAMES) == LL_TRACE + 1, "Invalid LL_LEVEL_NAMES[] size");
+
+static enum LogLevel max_log_lvl = LL_TRACE;
+static pthread_t llog_pid = 0;
+static struct mpsc_queue *mq = NULL;
+static int llog_to_console = 1;
+static int llog_file_fd = -1;
+static int llog_evt_fd = -1;
+static void *llog_thread(void* arg);
+
+static inline void llog_notify()
+{
+    uint64_t i = 1;
+    write(llog_evt_fd, &i, sizeof(i));
+}
+
+static inline void llog_wait()
+{
+    uint64_t i;
+    read(llog_evt_fd, &i, 8);
+}
+
+void llog_set_level(enum LogLevel lvl)
+{
+	max_log_lvl = lvl;
+}
+
+void llog_fmt(const char* filename, int fileline, const char* funcname, enum LogLevel lvl, const char* fmt, ...) 
+{
+	if (lvl > max_log_lvl)
+		return;
+
+    struct mpsc_msg *m = mpsc_reserve(mq);
+    if (!m)
+        return;
+
+    struct timespec tp;
+    time_t tt;
+    struct tm t;
+
+    clock_gettime(CLOCK_REALTIME, &tp);
+    tt = (time_t)tp.tv_sec;
+    localtime_r(&tt, &t);
+    const char *short_filename = strrchr(filename, '/');
+	short_filename = short_filename ? (short_filename + 1) : filename;
+
+    sbuf_t *b = sbuf_new1(INITIAL_BUFSZ);
+    sbuf_appendf(b, "%02d-%02d %02d:%02d:%02d.%03d %s:%d%s",
+                 t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min,
+                 t.tm_sec, (int)(tp.tv_nsec / 1000000),
+	             short_filename, fileline, LL_LEVEL_NAMES[lvl]);
+    va_list ap;
+    va_start(ap, fmt);
+    sbuf_appendv(b, fmt, ap);
+	va_end(ap);
+
+    sbuf_appendc(b, '\n');
+
+    m->u64[0] = (uint64_t)b;
+    mpsc_commit(m, LOG_MSG_DATA);
+    llog_notify();
+}
+
+void llog_init(int console, const char *fname)
+{
+    llog_to_console = console;
+    if (fname)
+        llog_file_fd = open(fname, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
+    else
+        llog_file_fd = -1;
+    llog_evt_fd = eventfd(0, EFD_CLOEXEC);
+    mq = mpsc_queue_new(16);
+    int ret = pthread_create(&llog_pid, NULL, llog_thread, NULL);
+    assert(!ret);
+}
+
+void llog_cleanup()
+{
+    struct mpsc_msg *m = mpsc_reserve(mq);
+    while (!m) {
+        pthread_yield();
+        m = mpsc_reserve(mq);
+    }
+    mpsc_commit(m, LOG_MSG_EXIT);
+    llog_notify();
+    pthread_join(llog_pid, NULL);
+    mpsc_queue_del(mq);
+    if (llog_file_fd != -1)
+        close(llog_file_fd);
+    if (llog_evt_fd != -1)
+        close(llog_evt_fd);
+}
+
+void *llog_thread(void *arg)
+{
+    while (1) {
+        struct mpsc_msg *m = mpsc_peek(mq);
+        while (m) {
+            if (m->id == LOG_MSG_DATA) {
+                sbuf_t *b = (void*)m->u64[0];
+                if (llog_to_console)
+                    write(STDOUT_FILENO, b->data, b->size);
+                if (llog_file_fd != -1)
+                    write(llog_file_fd, b->data, b->size);
+                sbuf_del(b);
+            } else if (m->id == LOG_MSG_EXIT) {
+                pthread_exit(NULL);
+            }
+            mpsc_consume(mq, m);
+            m = mpsc_peek(mq);
+        }
+        llog_wait();
+    }
+}
