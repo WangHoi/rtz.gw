@@ -108,11 +108,6 @@ int udp_chan_fd(udp_chan_t *chan)
     return chan->fd;
 }
 
-void udp_chan_set_sndbuf(udp_chan_t *chan, int size)
-{
-    set_socket_send_buf_size(chan->fd, size);
-}
-
 void chan_fd_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata)
 {
     int n, err = 0;

@@ -1,4 +1,4 @@
-﻿#include "ice.h"
+#include "ice.h"
 #include "sbuf.h"
 #include "event_loop.h"
 #include "udp_chan.h"
@@ -211,7 +211,7 @@ ice_server_t *ice_server_new(zl_loop_t *loop)
     srv->ip = sbuf_new1(16);
     sbuf_strcpy(srv->ip, "0.0.0.0");
     srv->udp_chan = udp_chan_new(loop);
-    udp_chan_set_sndbuf(srv->udp_chan, 1 << 20);
+    set_socket_send_buf_size(udp_chan_fd(srv->udp_chan), 1 << 16);
     srv->tcp_srv = tcp_srv_new(loop);
     INIT_LIST_HEAD(&srv->agent_list);
     return srv;

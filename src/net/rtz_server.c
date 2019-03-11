@@ -1,4 +1,4 @@
-#include "rtz_server.h"
+﻿#include "rtz_server.h"
 #include "event_loop.h"
 #include "net_util.h"
 #include "log.h"
@@ -11,6 +11,7 @@
 #include "net/nbuf.h"
 #include "macro_util.h"
 #include "net/tcp_chan.h"
+#include "net/tcp_chan_ssl.h"
 #include "net/udp_chan.h"
 #include "sha1.h"
 #include "ice.h"
@@ -58,9 +59,41 @@ enum {
 
 typedef struct http_peer_t http_peer_t;
 
+#if RTZ_SERVER_SSL
+#define TCP_SRV_T tcp_srv_ssl_t
+#define TCP_SRV_BIND tcp_srv_ssl_bind
+#define TCP_SRV_LISTEN tcp_srv_ssl_listen
+#define TCP_SRV_SET_CB tcp_srv_ssl_set_cb
+#define TCP_SRV_NEW tcp_srv_ssl_new
+#define TCP_SRV_DEL tcp_srv_ssl_del
+#define TCP_CHAN_T tcp_chan_ssl_t
+#define TCP_CHAN_CLOSE tcp_chan_ssl_close
+#define TCP_CHAN_SET_CB tcp_chan_ssl_set_cb
+#define TCP_CHAN_READC tcp_chan_ssl_readc
+#define TCP_CHAN_READ_BUF_EMPTY tcp_chan_ssl_read_buf_empty
+#define TCP_CHAN_GET_READ_BUF_SIZE tcp_chan_ssl_get_read_buf_size
+#define TCP_CHAN_READ tcp_chan_ssl_read
+#define TCP_CHAN_WRITE tcp_chan_ssl_write
+#else
+#define TCP_SRV_T tcp_srv_t
+#define TCP_SRV_BIND tcp_srv_bind
+#define TCP_SRV_LISTEN tcp_srv_listen
+#define TCP_SRV_SET_CB tcp_srv_set_cb
+#define TCP_SRV_NEW tcp_srv_new
+#define TCP_SRV_DEL tcp_srv_del
+#define TCP_CHAN_T tcp_chan_t
+#define TCP_CHAN_CLOSE tcp_chan_close
+#define TCP_CHAN_SET_CB tcp_chan_set_cb
+#define TCP_CHAN_READC tcp_chan_readc
+#define TCP_CHAN_READ_BUF_EMPTY tcp_chan_read_buf_empty
+#define TCP_CHAN_GET_READ_BUF_SIZE tcp_chan_get_read_buf_size
+#define TCP_CHAN_READ tcp_chan_read
+#define TCP_CHAN_WRITE tcp_chan_write
+#endif
+
 struct rtz_server_t {
     zl_loop_t *loop;
-    tcp_srv_t *tcp_srv;
+    TCP_SRV_T *tcp_srv;
     ice_server_t *ice_srv;
 
     struct list_head peer_list;     /* http_peer_t list */
@@ -70,7 +103,7 @@ struct rtz_server_t {
 
 struct http_peer_t {
     rtz_server_t *srv;
-    tcp_chan_t *chan;
+    TCP_CHAN_T *chan;
 
     enum http_parse_state parse_state;
     sbuf_t *parse_buf;
@@ -121,12 +154,12 @@ struct rtz_stream_t {
 #endif
 };
 
-static void accept_handler(tcp_srv_t *tcp_srv, tcp_chan_t *chan, void *udata);
+static void accept_handler(TCP_SRV_T *tcp_srv, TCP_CHAN_T *chan, void *udata);
 static void http_request_handler(http_peer_t *peer, http_request_t *req);
-static void peer_data_handler(tcp_chan_t *chan, void *udata);
-static void peer_error_handler(tcp_chan_t *chan, int status, void *udata);
+static void peer_data_handler(TCP_CHAN_T *chan, void *udata);
+static void peer_error_handler(TCP_CHAN_T *chan, int status, void *udata);
 
-static http_peer_t *http_peer_new(rtz_server_t *srv, tcp_chan_t *chan);
+static http_peer_t *http_peer_new(rtz_server_t *srv, TCP_CHAN_T *chan);
 static void http_peer_del(http_peer_t *peer);
 
 static void send_final_reply(http_peer_t *peer, http_status_t status);
@@ -173,7 +206,7 @@ rtz_server_t *rtz_server_new(zl_loop_t *loop)
     srv = malloc(sizeof(rtz_server_t));
     memset(srv, 0, sizeof(rtz_server_t));
     srv->loop = loop;
-    srv->tcp_srv = tcp_srv_new(loop); socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    srv->tcp_srv = TCP_SRV_NEW(loop);
     srv->ice_srv = ice_server_new(loop);
     ice_server_bind(srv->ice_srv, RTZ_LOCAL_IP, RTZ_LOCAL_MEDIA_PORT);
     ice_server_start(srv->ice_srv);
@@ -190,7 +223,7 @@ zl_loop_t *rtz_server_get_loop(rtz_server_t *srv)
 
 int rtz_server_bind(rtz_server_t *srv, unsigned short port)
 {
-    return tcp_srv_bind(srv->tcp_srv, NULL, port);
+    return TCP_SRV_BIND(srv->tcp_srv, NULL, port);
 }
 
 void rtz_server_del(rtz_server_t *srv)
@@ -198,13 +231,13 @@ void rtz_server_del(rtz_server_t *srv)
     rtz_server_stop(srv);
 
     ice_server_del(srv->ice_srv);
-    tcp_srv_del(srv->tcp_srv);
+    TCP_SRV_DEL(srv->tcp_srv);
     free(srv);
 }
 int rtz_server_start(rtz_server_t *srv)
 {
-    tcp_srv_set_cb(srv->tcp_srv, accept_handler, srv);
-    return tcp_srv_listen(srv->tcp_srv);
+    TCP_SRV_SET_CB(srv->tcp_srv, accept_handler, srv);
+    return TCP_SRV_LISTEN(srv->tcp_srv);
 }
 void rtz_server_stop(rtz_server_t *srv)
 {
@@ -218,7 +251,7 @@ void rtz_server_stop(rtz_server_t *srv)
     }
 }
 
-void accept_handler(tcp_srv_t *tcp_srv, tcp_chan_t *chan, void *udata)
+void accept_handler(TCP_SRV_T *tcp_srv, TCP_CHAN_T *chan, void *udata)
 {
     rtz_server_t *srv = udata;
     http_peer_t *peer = http_peer_new(srv, chan);
@@ -226,10 +259,10 @@ void accept_handler(tcp_srv_t *tcp_srv, tcp_chan_t *chan, void *udata)
         LLOG(LL_ERROR, "http_peer_new error.");
         return;
     }
-    tcp_chan_set_cb(peer->chan, peer_data_handler, NULL, peer_error_handler, peer);
+    TCP_CHAN_SET_CB(peer->chan, peer_data_handler, NULL, peer_error_handler, peer);
 }
 
-http_peer_t *http_peer_new(rtz_server_t *srv, tcp_chan_t *chan)
+http_peer_t *http_peer_new(rtz_server_t *srv, TCP_CHAN_T *chan)
 {
     http_peer_t *peer = malloc(sizeof(http_peer_t));
     if (peer == NULL)
@@ -249,7 +282,7 @@ void http_peer_del(http_peer_t *peer)
 {
     if (peer->parse_request)
         http_request_del(peer->parse_request);
-    tcp_chan_close(peer->chan, 0);
+    TCP_CHAN_CLOSE(peer->chan, 0);
     sbuf_del(peer->parse_buf);
     sbuf_del(peer->url_path);
     list_del(&peer->link);
@@ -267,7 +300,7 @@ void http_request_handler(http_peer_t *peer, http_request_t *req)
     if (peer->req_list.next != &req->link)
         return;
 
-    //LLOG(LL_TRACE, "handle: %s %s", http_strmethod(req->method), req->path);
+    LLOG(LL_TRACE, "handle: %s %s", http_strmethod(req->method), req->path);
     if (strstr(req->path, "/rtz") != req->path) {
         send_final_reply(peer, HTTP_STATUS_INTERNAL_SERVER_ERROR);
         list_del(&req->link);
@@ -342,9 +375,9 @@ void peer_ws_data_handler(http_peer_t *peer)
 {
     struct ws_frame frame;
     int i, expect_size = 0;
-    while (!tcp_chan_read_buf_empty(peer->chan)) {
+    while (!TCP_CHAN_READ_BUF_EMPTY(peer->chan)) {
         if (peer->parse_buf->size < 2) {
-            sbuf_appendc(peer->parse_buf, tcp_chan_readc(peer->chan));
+            sbuf_appendc(peer->parse_buf, TCP_CHAN_READC(peer->chan));
         } else {
             char *p = peer->parse_buf->data;
             frame.fin = p[0] & 0x80;
@@ -354,7 +387,7 @@ void peer_ws_data_handler(http_peer_t *peer)
 
             if (frame.payload_len == 126) {
                 if (peer->parse_buf->size < 4) {
-                    sbuf_appendc(peer->parse_buf, tcp_chan_readc(peer->chan));
+                    sbuf_appendc(peer->parse_buf, TCP_CHAN_READC(peer->chan));
                     continue;
                 } else {
                     frame.payload_len = unpack_be16(peer->parse_buf->data + 2);
@@ -362,7 +395,7 @@ void peer_ws_data_handler(http_peer_t *peer)
                 }
             } else if (frame.payload_len == 127) {
                 if (peer->parse_buf->size < 10) {
-                    sbuf_appendc(peer->parse_buf, tcp_chan_readc(peer->chan));
+                    sbuf_appendc(peer->parse_buf, TCP_CHAN_READC(peer->chan));
                     continue;
                 } else {
                     frame.payload_len = (int)unpack_be64(peer->parse_buf->data + 2);
@@ -373,15 +406,15 @@ void peer_ws_data_handler(http_peer_t *peer)
             }
 
             int old_size = peer->parse_buf->size;
-            int buf_size = tcp_chan_get_read_buf_size(peer->chan);
+            int buf_size = TCP_CHAN_GET_READ_BUF_SIZE(peer->chan);
             if (buf_size < expect_size) {
                 sbuf_resize(peer->parse_buf, old_size + buf_size);
-                tcp_chan_read(peer->chan, peer->parse_buf->data + old_size, buf_size);
+                TCP_CHAN_READ(peer->chan, peer->parse_buf->data + old_size, buf_size);
                 break;
             }
 
             sbuf_resize(peer->parse_buf, old_size + expect_size);
-            tcp_chan_read(peer->chan, peer->parse_buf->data + old_size, expect_size);
+            TCP_CHAN_READ(peer->chan, peer->parse_buf->data + old_size, expect_size);
             frame.payload_data = sbuf_tail(peer->parse_buf) - frame.payload_len;
             if (frame.mask) {
                 memcpy(frame.mask_key, sbuf_tail(peer->parse_buf) - frame.payload_len - 4, 4);
@@ -395,15 +428,15 @@ void peer_ws_data_handler(http_peer_t *peer)
     }
 }
 
-void peer_data_handler(tcp_chan_t *chan, void *udata)
+void peer_data_handler(TCP_CHAN_T *chan, void *udata)
 {
     http_peer_t *peer = udata;
-    while (!tcp_chan_read_buf_empty(chan)) {
+    while (!TCP_CHAN_READ_BUF_EMPTY(chan)) {
         if (peer->upgraded) {
             peer_ws_data_handler(peer);
         } else {
             if (peer->parse_state == HTTP_PARSE_HEADER) {
-                char c = tcp_chan_readc(chan);
+                char c = TCP_CHAN_READC(chan);
                 sbuf_appendc(peer->parse_buf, c);
                 if (sbuf_ends_with(peer->parse_buf, "\r\n\r\n")) {
                     http_request_t *req = http_parse_request(peer, peer->parse_buf->data,
@@ -422,8 +455,8 @@ void peer_data_handler(tcp_chan_t *chan, void *udata)
                     }
                 }
             } else if (peer->parse_state == HTTP_PARSE_BODY) {
-                if (peer->parse_request->body_len <= tcp_chan_get_read_buf_size(chan)) {
-                    tcp_chan_read(chan, peer->parse_request->body,
+                if (peer->parse_request->body_len <= TCP_CHAN_GET_READ_BUF_SIZE(chan)) {
+                    TCP_CHAN_READ(chan, peer->parse_request->body,
                                   peer->parse_request->body_len);
                     http_request_handler(peer, peer->parse_request);
                     peer->parse_request = NULL;
@@ -442,7 +475,7 @@ void peer_data_handler(tcp_chan_t *chan, void *udata)
     }
 }
 
-void peer_error_handler(tcp_chan_t *chan, int status, void *udata)
+void peer_error_handler(TCP_CHAN_T *chan, int status, void *udata)
 {
     http_peer_t *peer = udata;
     http_peer_del(peer);
@@ -458,7 +491,7 @@ void send_final_reply(http_peer_t *peer, http_status_t status)
                      "\r\n",
                      status, http_strstatus(status));
     if (n > 0) {
-        tcp_chan_write(peer->chan, s, n);
+        TCP_CHAN_WRITE(peer->chan, s, n);
         free(s);
     }
     peer->flag |= HTTP_PEER_CLOSE_ASAP;
@@ -541,7 +574,7 @@ void send_upgrade_reply(http_peer_t *peer, const char *client_key)
                  "\r\n",
                  status, http_strstatus(status), sec_result);
     if (n > 0) {
-        tcp_chan_write(peer->chan, s, n);
+        TCP_CHAN_WRITE(peer->chan, s, n);
         free(s);
     }
     sbuf_del(sec_key);
@@ -575,8 +608,8 @@ void send_ws_frame(http_peer_t *peer, int opcode, const void *data, int size)
         header[1] = size;
         n = 2;
     }
-    tcp_chan_write(peer->chan, header, n);
-    tcp_chan_write(peer->chan, data, size);
+    TCP_CHAN_WRITE(peer->chan, header, n);
+    TCP_CHAN_WRITE(peer->chan, data, size);
 }
 
 void create_session(http_peer_t *peer, const char *transaction)

@@ -16,4 +16,3 @@ void udp_chan_close(udp_chan_t *chan);
 int udp_chan_write(udp_chan_t *chan, const void *data, int size,
                    const struct sockaddr *dest_addr, socklen_t addrlen);
 int udp_chan_fd(udp_chan_t *chan);
-void udp_chan_set_sndbuf(udp_chan_t *chan, int size);

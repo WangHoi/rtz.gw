@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+﻿cmake_minimum_required(VERSION 3.10)
 project(rtz.gw C ASM)
 
 set(OPENSSL_ROOT_DIR /usr/local/ssl)
@@ -12,6 +12,7 @@ add_subdirectory(3rdparty/cJSON-1.7.10)
 #add_subdirectory(3rdparty/libaco-1.2.4)
 add_subdirectory(3rdparty/mxml-2.12)
 
+option(RTZ_SERVER_SSL "enable SSL rtz server" OFF)
 option(WITH_ASAN "enable address sanitizer" OFF)
 option(WITH_TCMALLOC "link with tcmalloc" OFF)
 
@@ -44,6 +45,7 @@ set(onvif_gw_SRCS
     src/net/dtls-bio.c
     src/net/rtp.c
     src/net/rtcp.c
+    src/net/tcp_chan_ssl.c
     src/zk_util.c
 	src/cbuf.c
 	src/sbuf.c
@@ -81,6 +83,9 @@ endif ()
 if (WITH_TCMALLOC)
     target_link_libraries(rtz.gw tcmalloc)
 endif ()
+if (RTZ_SERVER_SSL)
+    add_definitions(-DRTZ_SERVER_SSL=1)
+endif ()
 find_library(srtp2_LIBRARY srtp2 PATHS /usr/local/lib NO_DEFAULT_PATH)
 target_link_libraries(rtz.gw
     zookeeper_mt
@@ -95,8 +100,11 @@ target_link_libraries(rtz.gw
     m
     dl
 	)
-#[[
+
 add_executable(test_srv src/test_srv.c
+    src/net/tcp_chan.c
+    src/net/nbuf.c
+    src/net/net_util.c
 	src/mpsc_queue.c
 	src/cbuf.c
 	src/sbuf.c
@@ -104,7 +112,7 @@ add_executable(test_srv src/test_srv.c
 	src/event_loop.c
 	src/log.c
 )
-target_link_libraries(test_srv uv pthread)
+target_link_libraries(test_srv pthread)
 add_executable(test_client src/test_client.c
 	src/mpsc_queue.c
 	src/cbuf.c
@@ -114,4 +122,3 @@ add_executable(test_client src/test_client.c
 	src/log.c
 )
 target_link_libraries(test_client uv pthread)
-]]

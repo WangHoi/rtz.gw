@@ -1,4 +1,4 @@
-#include "tcp_chan.h"
+﻿#include "tcp_chan.h"
 #include "nbuf.h"
 #include "net_util.h"
 #include "event_loop.h"
@@ -260,17 +260,14 @@ read_again:
             }
         } else if (!nbuf_empty(chan->snd_buf)) {
             int old, iov_cnt;
-            long long ts, dt;
 write_again:
             old = nbuf_size(chan->snd_buf);
             iov_cnt = nbuf_peekv(chan->snd_buf, iov, 1/*ARRAY_SIZE(iov)*/, NULL/*&old*/);
             assert(iov_cnt > 0);
-            ts = zl_timestamp();
             if (iov_cnt == 1)
                 n = write(fd, iov[0].iov_base, iov[0].iov_len);
             else
                 n = writev(fd, iov, iov_cnt);
-            dt = zl_timestamp() - ts;
             if (n > 0) {
                 nbuf_consume(chan->snd_buf, n);
             } else if (n == -1) {
@@ -372,9 +369,4 @@ tcp_chan_t *tcp_connect(zl_loop_t *loop, const char *ip, unsigned port)
 err_out:
     free(chan);
     return NULL;
-}
-
-void tcp_chan_set_sndbuf(tcp_chan_t *chan, int size)
-{
-    set_socket_send_buf_size(chan->fd, size);
 }

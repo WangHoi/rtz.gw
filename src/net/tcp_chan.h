@@ -1,5 +1,6 @@
 #pragma once
 
+struct sockaddr;
 typedef struct zl_loop_t zl_loop_t;
 typedef struct nbuf_t nbuf_t;
 typedef struct tcp_chan_t tcp_chan_t;
@@ -35,6 +36,5 @@ char tcp_chan_peekc(tcp_chan_t *chan);
 int tcp_chan_get_write_buf_size(tcp_chan_t *chan);
 int tcp_chan_write_buf_empty(tcp_chan_t * chan);
 int tcp_chan_write(tcp_chan_t *chan, const void *data, int size);
-struct sockaddr;
 int tcp_chan_get_peername(tcp_chan_t *chan, struct sockaddr *addr, int addrlen);
 int tcp_chan_fd(tcp_chan_t *chan);
