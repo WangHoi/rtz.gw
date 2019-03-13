@@ -34,11 +34,9 @@ sbuf_t *sbuf_newf(const char *format, ...)
 
 sbuf_t *sbuf_newv(const char *format, va_list ap)
 {
-    va_list saved;
-    va_copy(saved, ap);
     char *data;
     int size = vasprintf(&data, format, ap);
-    if (size < 0) 
+    if (size < 0)
         return sbuf_new();
     sbuf_t *s = malloc(sizeof(sbuf_t));
     s->data = data;
@@ -152,11 +150,14 @@ void sbuf_appendv(sbuf_t *dst, const char *format, va_list ap)
     va_copy(saved, ap);
     int size = vsnprintf(dst->data + dst->size, dst->capacity - dst->size,
                          format, ap);
-    if (size < 0)
+    if (size < 0) {
+        va_end(saved);
         return;
+    }
     if (dst->size + size >= dst->capacity) {
         sbuf_reserve(dst, dst->size + size + 1);
         va_copy(ap, saved);
+        va_end(saved);
         vsnprintf(dst->data + dst->size, dst->capacity - dst->size,
                   format, ap);
     }
@@ -262,14 +263,14 @@ void sbuf_vprintf(sbuf_t *s, const char *format, va_list ap)
 {
     va_list saved;
     va_copy(saved, ap);
-    int size = vsnprintf(s->data, s->capacity, format, ap);
+    int size = vsnprintf(s->data, s->capacity, format, saved);
+    va_end(saved);
     if (size < 0) {
         sbuf_clear(s);
     } else if (size < s->capacity) {
         s->size = size;
     } else {
         sbuf_reserve(s, size + 1);
-        va_copy(ap, saved);
         s->size = vsnprintf(s->data, s->capacity, format, ap);
     }
 }

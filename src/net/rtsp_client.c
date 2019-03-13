@@ -782,6 +782,7 @@ void update_auth_info(rtsp_client_t *client, const char *data, size_t size)
             if (q) {
                 sbuf_strcpy(client->auth_realm, q);
                 free(q);
+                q = NULL;
             }
         }
         p = strstr(s, "nonce=");
@@ -790,6 +791,7 @@ void update_auth_info(rtsp_client_t *client, const char *data, size_t size)
             if (q) {
                 sbuf_strcpy(client->auth_nonce, q);
                 free(q);
+                q = NULL;
             }
         }
     }

@@ -1,4 +1,4 @@
-﻿#include "dtls.h"
+#include "dtls.h"
 #include "dtls-bio.h"
 #include "log.h"
 #include "rtp_srtp.h"
@@ -181,7 +181,7 @@ dtls_srtp *dtls_srtp_create(void *ice_component, dtls_role role)
     if (!dtls->ssl) {
         LLOG(LL_ERROR, "Error creating DTLS session! (%s)",
              ERR_reason_error_string(ERR_get_error()));
-        // free dtls
+        free(dtls);
         return NULL;
     }
     SSL_set_ex_data(dtls->ssl, 0, dtls);
@@ -190,8 +190,8 @@ dtls_srtp *dtls_srtp_create(void *ice_component, dtls_role role)
     if (!dtls->read_bio) {
         LLOG(LL_ERROR, "Error creating read BIO! (%s)",
              ERR_reason_error_string(ERR_get_error()));
-        //janus_refcount_decrease(&dtls->ref);
-        // free dtls
+        SSL_free(dtls->ssl);
+        free(dtls);
         return NULL;
     }
     BIO_set_mem_eof_return(dtls->read_bio, -1);
@@ -199,8 +199,9 @@ dtls_srtp *dtls_srtp_create(void *ice_component, dtls_role role)
     if (!dtls->write_bio) {
         LLOG(LL_ERROR, "Error creating write BIO! (%s)",
              ERR_reason_error_string(ERR_get_error()));
-        // janus_refcount_decrease(&dtls->ref);
-        // free dtls
+        BIO_free(dtls->read_bio);
+        SSL_free(dtls->ssl);
+        free(dtls);
         return NULL;
     }
     SSL_set_bio(dtls->ssl, dtls->read_bio, dtls->write_bio);

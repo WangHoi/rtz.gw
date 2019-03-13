@@ -1,4 +1,4 @@
-﻿#include "http_types.h"
+#include "http_types.h"
 #include "log.h"
 #include <strings.h>
 #include <stdlib.h>
@@ -240,6 +240,7 @@ int http_parse_header(struct list_head *list,
     http_header_t *hdr = NULL;
     char *hdr_name = NULL;
     char *hdr_value = NULL;
+    char *tmp;
     int ret;
     ret = sscanf(p, "%m[^: \r\n]", &hdr_name);
     if (ret > 0) {
@@ -270,7 +271,11 @@ int http_parse_header(struct list_head *list,
             p += strlen(hdr_value_cont);
             int value_len = strlen(hdr_value);
             int value_cont_len = strlen(hdr_value_cont);
-            hdr_value = realloc(hdr_value, value_len + value_cont_len + 1);
+            tmp = realloc(hdr_value, value_len + value_cont_len + 1);
+            if (tmp)
+                hdr_value = tmp;
+            else
+                goto err_out;
             strcpy(hdr_value + value_len, hdr_value_cont);
             free(hdr_value_cont);
             http_consume_while_spaces(p, pend, &p);
