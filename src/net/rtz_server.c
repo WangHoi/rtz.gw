@@ -284,6 +284,13 @@ void http_peer_del(http_peer_t *peer)
 {
     if (peer->parse_request)
         http_request_del(peer->parse_request);
+    rtz_session_t *s, *tmp;
+    list_for_each_entry_safe(s, tmp, &peer->srv->session_list, link) {
+        if (s->peer == peer) {
+            LLOG(LL_ERROR, "release session %p sid='%s'", s, s->id->data);
+            rtz_session_del(s);
+        }
+    }
     TCP_CHAN_CLOSE(peer->chan, 0);
     sbuf_del(peer->parse_buf);
     sbuf_del(peer->url_path);
