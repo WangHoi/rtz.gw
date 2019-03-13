@@ -4,7 +4,7 @@
             "name": "Linux",
             "generator": "Unix Makefiles",
             "remoteMachineName": "${defaultRemoteMachineName}",
-            "configurationType": "Debug",
+            "configurationType": "RelWithDebInfo",
             "remoteCMakeListsRoot": "/var/tmp/src/${workspaceHash}/${name}",
             "cmakeExecutable": "/usr/local/bin",
             "buildRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\build\\${name}",
@@ -21,7 +21,7 @@
             ],
             "rsyncCommandArgs": "-t --delete --delete-excluded",
             "remoteCopyBuildOutput": false,
-            "cmakeCommandArgs": "-DWITH_ASAN=OFF -DWITH_TCMALLOC=OFF",
+            "cmakeCommandArgs": "-DWITH_ASAN=OFF -DWITH_TCMALLOC=ON",
             "buildCommandArgs": "-j2",
             "ctestCommandArgs": "",
             "inheritEnvironments": [

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "http_types.h"
 #include <stdint.h>
 
@@ -18,7 +18,7 @@ rtz_stream_t *rtz_stream_new(rtz_server_t *srv, const char *stream_name);
 void rtz_stream_del(rtz_stream_t *stream);
 rtz_stream_t *rtz_stream_get(rtz_server_t *srv, const char *stream_name);
 void rtz_stream_set_video_codec_h264(rtz_stream_t *session, const void *data, int size);
-void rtz_stream_push_video(rtz_stream_t *stream, uint32_t rtp_timestamp,
+void rtz_stream_push_video(rtz_stream_t *stream, uint32_t rtp_timestamp, uint16_t sframe_time,
                            int key_frame, const void *data, int size);
 void rtz_stream_push_audio(rtz_stream_t *stream, uint32_t rtp_timestamp,
                            const void *data, int size);

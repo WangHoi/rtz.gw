@@ -1,4 +1,4 @@
-﻿#include "rtmp_server.h"
+#include "rtmp_server.h"
 #include "event_loop.h"
 #include "net_util.h"
 #include "log.h"
@@ -102,6 +102,8 @@ struct rtmp_peer_t {
     audio_codec_t *acodec;
 
     double duration;
+    uint16_t sframe_time;       /* smoothed 1000/fps */
+    int64_t last_video_ts;
 
     sbuf_t *sps;
     sbuf_t *pps;
@@ -117,7 +119,7 @@ struct rtmp_peer_t {
 	int flag;
     struct list_head link;
 
-    long long last_ts;
+    long long last_time;
 };
 
 static void accept_handler(tcp_srv_t *srv, tcp_chan_t *chan, void *udata);
@@ -559,8 +561,19 @@ void chunk_handler(rtmp_peer_t *peer)
     } else if (hdr->type_id == RTMP_MESSAGE_VIDEO) {
         //LLOG(LL_TRACE, "video size=%d data=%02hhx%02hhx%02hhx%02hhx", (int)size, data[0], data[1], data[2], data[3]);
         int64_t timestamp = tsc_timestamp(peer->video_tsc, hdr->timestamp);
+
+        /* Update frame_time */
+        int64_t frame_time = timestamp - peer->last_video_ts;
+        if (0 < frame_time && frame_time < 1000) {
+            if (peer->sframe_time)
+                peer->sframe_time = (frame_time + 3 * peer->sframe_time) / 4;
+            else
+                peer->sframe_time = frame_time;
+        }
+        peer->last_video_ts = timestamp;
+
         if (size > 5) {
-            if ((data[0] & 0xf) == 7) { // avc codec
+            if ((data[0] & 0xf) == 7) { // AVC Codec
                 char *p = data + 5;
                 int psize = size - 5;
                 if (data[1] == 0) {
@@ -680,11 +693,13 @@ void audio_handler(rtmp_peer_t *peer, int64_t timestamp, const char *data, int s
 
 void video_nalu_handler(rtmp_peer_t *peer, int64_t timestamp, const char *data, int size)
 {
-    long long now = zl_timestamp();
     //LLOG(LL_TRACE, "got nalu timestamp=%u type=%02hhx size=%d",
     //     (unsigned)timestamp, data[0], size);
-    if (peer->last_ts && now - peer->last_ts >= 100)
-        LLOG(LL_WARN, "%s interframe delay %lld", peer->stream->data, now - peer->last_ts);
+    long long now = zl_timestamp();
+    if (peer->last_time && now - peer->last_time > 2 * peer->sframe_time + peer->sframe_time / 2)
+        LLOG(LL_WARN, "%s interframe delay %lld(%hu)",
+             peer->stream->data, now - peer->last_time, peer->sframe_time);
+    peer->last_time = now;
 
     unsigned nalu_type = (unsigned)data[0] & 0x1f;
     if (nalu_type != H264_NALU_IFRAME && nalu_type != H264_NALU_PFRAME)
@@ -715,10 +730,8 @@ void video_nalu_handler(rtmp_peer_t *peer, int64_t timestamp, const char *data, 
     */
     uint32_t rtp_ts = (uint32_t)(timestamp * 90);
     int key_frame = (nalu_type == H264_NALU_IFRAME);
-    rtz_stream_push_video(peer->rtz_stream, rtp_ts, key_frame, data, size);
+    rtz_stream_push_video(peer->rtz_stream, rtp_ts, peer->sframe_time, key_frame, data, size);
     push_video(peer->srv, peer->stream->data, (uint32_t)timestamp, key_frame, data, size);
-
-    peer->last_ts = now;
 }
 
 void video_avc_handler(rtmp_peer_t *peer, int64_t timestamp, const char *data, int size)
@@ -783,6 +796,8 @@ void metadata_handler(rtmp_peer_t *peer, const char *data, int size)
         } else if (!strcmp(name->data, "framerate")) {
             p += amf0_read_number(p, pend - p, &num);
             peer->vcodec->frame_rate = lroundl(num);
+            if (peer->vcodec->frame_rate > 0 && !peer->sframe_time)
+                peer->sframe_time = 1000 / peer->vcodec->frame_rate;
             //LLOG(LL_TRACE, "framerate=%d", peer->vcodec->frame_rate);
         } else if (!strcmp(name->data, "videocodecid")) {
             if (p[0] == AMF0_TYPE_STRING) {

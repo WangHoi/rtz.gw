@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.10)
 project(rtz.gw C ASM)
 
 set(OPENSSL_ROOT_DIR /usr/local/ssl)
@@ -16,7 +16,7 @@ option(RTZ_SERVER_SSL "enable SSL rtz server" OFF)
 option(WITH_ASAN "enable address sanitizer" OFF)
 option(WITH_TCMALLOC "link with tcmalloc" OFF)
 
-set(onvif_gw_SRCS
+set(rtz_SRCS
 #    src/hook/aco_hook_syscall.c
     src/media/sdp.c
     src/media/fmp4_mux.c
@@ -54,17 +54,16 @@ set(onvif_gw_SRCS
 	src/log.c
 	src/main.c
 	src/mpsc_queue.c
-    src/base64.c
-    src/md5.c
-    src/sha1.c
-    src/hmac_sha1.c
-    src/crc32.c
-    src/pack_util.c
+    src/algo/base64.c
+    src/algo/md5.c
+    src/algo/sha1.c
+    src/algo/hmac_sha1.c
+    src/algo/crc32.c
     src/timestamp.c
     src/apierror.c
 #    src/rtmp_client.c
 	)
-add_executable(rtz.gw ${onvif_gw_SRCS})
+add_executable(rtz.gw ${rtz_SRCS})
 include_directories(
     /usr/include/apr-1.0
     ${CMAKE_CURRENT_SOURCE_DIR}/src

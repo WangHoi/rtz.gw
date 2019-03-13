@@ -9,7 +9,7 @@
 #include "net/nbuf.h"
 #include "macro_util.h"
 #include "tcp_chan.h"
-#include "sha1.h"
+#include "algo/sha1.h"
 #include "rtz_server.h"
 #include "rtmp_server.h"
 #include <time.h>

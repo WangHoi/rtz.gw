@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #ifndef SAME_TYPE
 #define SAME_TYPE(a, b) __builtin_types_compatible_p(typeof(a), typeof(b))
@@ -32,3 +32,13 @@
 #ifndef ABS
 #define ABS(x) (((x) < 0) ? -(x) : (x))
 #endif
+
+#ifndef BITS_PER_LONG
+#define BITS_PER_LONG  (sizeof(long) * 8)
+#endif
+#undef HAVE_ARCH__HASH_32
+
+#ifndef __always_inline
+#define __always_inline __attribute__((always_inline))
+#endif
+

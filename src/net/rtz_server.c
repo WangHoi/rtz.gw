@@ -1,4 +1,4 @@
-﻿#include "rtz_server.h"
+#include "rtz_server.h"
 #include "event_loop.h"
 #include "net_util.h"
 #include "log.h"
@@ -6,14 +6,14 @@
 #include "sbuf.h"
 #include "list.h"
 #include "rtp.h"
-#include "base64.h"
+#include "algo/base64.h"
 #include "pack_util.h"
 #include "net/nbuf.h"
 #include "macro_util.h"
 #include "net/tcp_chan.h"
 #include "net/tcp_chan_ssl.h"
 #include "net/udp_chan.h"
-#include "sha1.h"
+#include "algo/sha1.h"
 #include "ice.h"
 #include "dtls.h"
 #include "media/rtp_mux.h"
@@ -38,7 +38,8 @@ extern const char *RTZ_LOCAL_IP;
 extern const char *RTZ_PUBLIC_IP;
 extern int RTZ_PUBLIC_MEDIA_PORT;
 extern int RTZ_LOCAL_MEDIA_PORT;
-#define MAX_PLAYOUT_DELAY 1000
+
+#define MAX_PLAYOUT_DELAY_FRAMES 50
 
 enum http_parse_state {
     HTTP_PARSE_HEADER,
@@ -137,7 +138,7 @@ typedef struct rtz_handle_t {
     ice_agent_t *ice;
     int flag;
     int sdp_version;
-    uint16_t min_playout_delay;
+    uint16_t min_playout_delay;     /* frames: nodelay:0, balanced:8, smooth:16 */
     struct list_head link;
     struct list_head stream_link;   /* link to rtz_stream_t.handle_list */
 } rtz_handle_t;
@@ -146,7 +147,8 @@ struct rtz_stream_t {
     rtz_server_t *srv;
     sbuf_t *stream_name;
     rtp_mux_t *rtp_mux;
-    long long last_ts;
+    uint16_t sframe_time;
+    long long last_time;
     struct list_head link;
     struct list_head handle_list;
 #ifdef ENABLE_RTP_TESTCHAN
@@ -346,8 +348,8 @@ void peer_ws_frame_handler(http_peer_t *peer, struct ws_frame *frame)
                 uint16_t min_playout_delay = 0;
                 if (cJSON_IsNumber(min_playout_delay_json))
                     min_playout_delay = (uint16_t)min_playout_delay_json->valueint;
-                if (min_playout_delay > MAX_PLAYOUT_DELAY)
-                    min_playout_delay = MAX_PLAYOUT_DELAY;
+                if (min_playout_delay > MAX_PLAYOUT_DELAY_FRAMES)
+                    min_playout_delay = MAX_PLAYOUT_DELAY_FRAMES;
                 create_handle(peer, transaction, session_id, url, transport, min_playout_delay);
             } else if (!strcmp(type, "destroyHandle")) {
                 destroy_handle(peer, transaction, session_id, handle_id);
@@ -1066,7 +1068,8 @@ void rtz_stream_set_video_codec_h264(rtz_stream_t *stream, const void *data, int
                         pps_data, pps_size);
 }
 
-void rtz_stream_push_video(rtz_stream_t *stream, uint32_t rtp_ts, int key_frame, const void *data, int size)
+void rtz_stream_push_video(rtz_stream_t *stream, uint32_t rtp_ts, uint16_t sframe_time,
+                           int key_frame, const void *data, int size)
 {
     long long now = zl_time();
     //if (stream->last_ts) {
@@ -1074,7 +1077,8 @@ void rtz_stream_push_video(rtz_stream_t *stream, uint32_t rtp_ts, int key_frame,
     //    if (diff > 100)
     //        LLOG(LL_TRACE, "video %s dt=%lld ms", stream->stream_name->data, diff);
     //}
-    stream->last_ts = now;
+    stream->last_time = now;
+    stream->sframe_time = sframe_time;
     rtp_mux_input(stream->rtp_mux, 1, rtp_ts, data, size);
 }
 
@@ -1160,8 +1164,11 @@ void rtp_mux_handler(int video, int kf, void *data, int size, void *udata)
             send_json(handle->session->peer, json);
             cJSON_Delete(json);
         }
-        if (playout_delay_ext_ref)
-            update_playout_delay_ext(playout_delay_ext_ref, handle->min_playout_delay);
+        if (playout_delay_ext_ref) {
+            const uint16_t frame_time = stream->sframe_time ?: 40;
+            update_playout_delay_ext(playout_delay_ext_ref,
+                                     frame_time * handle->min_playout_delay);
+        }
         send_rtp(handle, video, data, size);
     }
 

@@ -1,9 +1,9 @@
 #include "stun.h"
 #include "macro_util.h"
-#include "crc32.h"
-#include "sha1.h"
-#include "hmac_sha1.h"
-#include "md5.h"
+#include "algo/crc32.h"
+#include "algo/sha1.h"
+#include "algo/hmac_sha1.h"
+#include "algo/md5.h"
 #include <memory.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
