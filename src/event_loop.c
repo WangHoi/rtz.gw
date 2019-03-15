@@ -160,7 +160,7 @@ int zl_poll(zl_loop_t *loop, int timeout)
     ne += run_jobs(loop);
     long long ts4 = zl_time();
     long long dt = (ts4 - ts3) + (ts2 - ts1);
-    if (dt > 5)
+    if (dt > 20)
         LLOG(LL_WARN, "event loop cost %lld ms", dt);
     return ne;
 }

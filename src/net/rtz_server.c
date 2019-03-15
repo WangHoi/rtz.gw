@@ -1078,13 +1078,7 @@ void rtz_stream_set_video_codec_h264(rtz_stream_t *stream, const void *data, int
 void rtz_stream_push_video(rtz_stream_t *stream, uint32_t rtp_ts, uint16_t sframe_time,
                            int key_frame, const void *data, int size)
 {
-    long long now = zl_time();
-    //if (stream->last_ts) {
-    //    long long diff = now - stream->last_ts;
-    //    if (diff > 100)
-    //        LLOG(LL_TRACE, "video %s dt=%lld ms", stream->stream_name->data, diff);
-    //}
-    stream->last_time = now;
+    stream->last_time = zl_time();
     stream->sframe_time = sframe_time;
     rtp_mux_input(stream->rtp_mux, 1, rtp_ts, data, size);
 }
