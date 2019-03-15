@@ -170,6 +170,7 @@ struct ice_agent_t {
     /* TODO: refactor to ice_component_t */
     tcp_chan_t *peer_tcp;
     int cand_state;
+    int no_err_log;
     struct list_head link;
 };
 
@@ -823,14 +824,20 @@ int ice_component_send(ice_component_t *component, const void *data, int size)
 {
     ice_agent_t *agent = component->stream->agent;
     if (!agent->cand_state) {
-        LLOG(LL_ERROR, "ice_component_send failed, no valid candidate pair.");
+        if (!agent->no_err_log) {
+            /* suppress error log */
+            agent->no_err_log = 1;
+            LLOG(LL_ERROR, "rtz_handle %p ice_agent %p component_send failed, no valid candidate pair.",
+                 agent->rtz_handle, agent);
+        }
         return -1;
     }
     struct sockaddr *addr = (struct sockaddr*)&agent->peer_addr;
     socklen_t slen = sizeof(struct sockaddr_in);
     if (agent->peer_tcp) {
         if (tcp_chan_get_write_buf_size(agent->peer_tcp) > ICE_MAX_TCP_WRITE_BUF_SIZE) {
-            LLOG(LL_ERROR, "slow connection, abort stun-tcp channel.");
+            LLOG(LL_ERROR, "rtz_handle %p ice_agent %p slow connection, abort stun-tcp channel.",
+                 agent->rtz_handle, agent);
             ice_tcp_error_cleanup(agent->peer_tcp, agent->srv);
             return -1;
         }
@@ -1015,9 +1022,9 @@ void ice_send_packet(ice_agent_t *agent, ice_queued_packet *pkt)
             } else {
                 /* Shoot! */
                 int sent = ice_component_send(component, pkt->data, protected);
-                if (sent < protected) {
-                    LLOG(LL_ERROR, " ... only sent %d bytes? (was %d)", sent, protected);
-                }
+                //if (sent < protected) {
+                //    LLOG(LL_ERROR, " ... only sent %d bytes? (was %d)", sent, protected);
+                //}
             }
         }
         ice_free_queued_packet(pkt);
@@ -1153,9 +1160,9 @@ void ice_send_packet(ice_agent_t *agent, ice_queued_packet *pkt)
                     //LLOG(LL_TRACE, "send m=%d ts=%d size=%d", (int)hdr->markerbit, ntohl(hdr->timestamp), protected);
                     /* Shoot! */
                     int sent = ice_component_send(component, pkt->data, protected);
-                    if (sent < protected) {
-                        LLOG(LL_ERROR, " ... only sent %d bytes? (was %d), err: %s", sent, protected, strerror(errno));
-                    }
+                    //if (sent < protected) {
+                    //    LLOG(LL_ERROR, " ... only sent %d bytes? (was %d), err: %s", sent, protected, strerror(errno));
+                    //}
                     /* Update stats */
                     if (sent > 0) {
                         /* Update the RTCP context as well */
@@ -1372,7 +1379,8 @@ void ice_tcp_error_cleanup(tcp_chan_t *chan, ice_server_t *srv)
         if (agent->peer_tcp == chan) {
             agent->peer_tcp = NULL;
             agent->cand_state = ICE_CAND_STATE_EMPTY;
-            ice_webrtc_hangup(agent, "TcpSocket Error");
+            agent->no_err_log = 0;
+            //ice_webrtc_hangup(agent, "TcpSocket Error");
         }
     }
     tcp_chan_close(chan, 0);
