@@ -237,7 +237,6 @@ void ice_tcp_accept_handler(tcp_srv_t *tcp_srv, tcp_chan_t *chan, void *udata)
 {
     ice_server_t *srv = udata;
     tcp_chan_set_cb(chan, ice_tcp_data_handler, NULL, ice_tcp_error_handler, srv);
-    //tcp_chan_set_sndbuf(chan, 1 << 20);
 }
 
 void ice_server_start(ice_server_t *srv)
@@ -267,7 +266,7 @@ void ice_agent_del(ice_agent_t *handle)
         return;
     LLOG(LL_TRACE, "release agent %p luser='%s'", handle, handle->stream->luser->data);
     if (handle->peer_tcp)
-        tcp_chan_close(handle->peer_tcp, 0);
+        ice_tcp_error_cleanup(handle->peer_tcp, handle->srv);
     ice_webrtc_hangup(handle, "Delete ICE Agent");
     ice_flags_set(handle, ICE_HANDLE_WEBRTC_STOP);
     ice_stream_del(handle->stream);

@@ -99,7 +99,7 @@ target_link_libraries(rtz.gw
     m
     dl
 	)
-
+#[[
 add_executable(test_srv src/test_srv.c
     src/net/tcp_chan.c
     src/net/nbuf.c
@@ -121,3 +121,4 @@ add_executable(test_client src/test_client.c
 	src/log.c
 )
 target_link_libraries(test_client uv pthread)
+]]

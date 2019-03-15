@@ -21,7 +21,7 @@
             ],
             "rsyncCommandArgs": "-t --delete --delete-excluded",
             "remoteCopyBuildOutput": false,
-            "cmakeCommandArgs": "-DWITH_ASAN=OFF -DWITH_TCMALLOC=ON",
+            "cmakeCommandArgs": "-DWITH_ASAN=ON -DWITH_TCMALLOC=OFF",
             "buildCommandArgs": "-j2",
             "ctestCommandArgs": "",
             "inheritEnvironments": [

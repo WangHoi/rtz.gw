@@ -23,6 +23,12 @@ int set_tcp_nodelay(int fd, int nodelay)
 	return setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(int));
 }
 
+int set_socket_max_pacing_rate(int fd, int rate)
+{
+    return setsockopt(fd, SOL_SOCKET, SO_MAX_PACING_RATE,
+                      &rate, sizeof(rate));
+}
+
 int set_socket_reuseport(int fd, int reuse)
 {
 	return setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(int));

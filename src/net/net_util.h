@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 
 int set_tcp_nodelay(int fd, int nodelay);
+int set_socket_max_pacing_rate(int fd, int rate);
 int set_socket_keepalive(int fd, int keepalive);
 int set_socket_reuseport(int fd, int reuse);
 int set_nonblock(int fd, int nonblock);

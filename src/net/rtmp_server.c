@@ -281,8 +281,10 @@ void peer_data_handler(tcp_chan_t *chan, void *udata)
     if (peer->hstate == RTMP_HS_DONE)
         session_handler(peer);
     peer->flag &= ~RTMP_PEER_IN_EVENT_CB;
-    if (peer->flag & (RTMP_PEER_ERROR | RTMP_PEER_EOF))
+    if (peer->flag & (RTMP_PEER_ERROR | RTMP_PEER_EOF)) {
+        LLOG(LL_ERROR, "rtmp_peer %p error, flag %d", peer, peer->flag);
         rtmp_peer_del(peer);
+    }
 }
 
 void peer_error_handler(tcp_chan_t *chan, int status, void *udata)
