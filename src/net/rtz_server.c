@@ -1169,6 +1169,7 @@ void rtp_mux_handler(int video, int kf, void *data, int size, void *udata)
             const uint16_t frame_time = stream->sframe_time ?: 40;
             update_playout_delay_ext(playout_delay_ext_ref,
                                      frame_time * handle->min_playout_delay);
+            ice_prepare_video_keyframe(handle->ice);
         }
         send_rtp(handle, video, data, size);
     }

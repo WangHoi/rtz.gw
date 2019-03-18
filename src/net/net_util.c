@@ -68,8 +68,20 @@ int set_socket_send_buf_size(int fd, int size)
     return setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &size, sizeof(int));
 }
 
+int get_socket_send_buf_size(int fd, int *size)
+{
+    socklen_t len = sizeof(int);
+    return getsockopt(fd, SOL_SOCKET, SO_SNDBUF, size, &len);
+}
+
 int set_socket_recv_buf_size(int fd, int size)
 {
     size /= 2; // kernel will double the value
     return setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof(int));
+}
+
+int set_ip_tos(int fd, int dscp_class)
+{
+    int tos = (dscp_class << 2);
+    return setsockopt(fd, IPPROTO_IP, IP_TOS, &tos, sizeof(int));
 }

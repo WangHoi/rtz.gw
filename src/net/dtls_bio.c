@@ -1,4 +1,4 @@
-#include "dtls-bio.h"
+#include "dtls_bio.h"
 #include "log.h"
 #include "ice.h"
 
@@ -102,19 +102,14 @@ static int dtls_bio_agent_write(BIO *bio, const char *in, int inl)
         /* FIXME Just a warning for now, this will need to be solved with proper fragmentation */
         LLOG(LL_WARN, "The DTLS stack with packet size %d exceeds MTU, dropped!", inl);
     }
-    int bytes = ice_component_send(component, in, inl);
-    if (bytes < inl) {
-        LLOG(LL_ERROR, "Error sending DTLS messaged size=%d", bytes);
-    } else {
-        //LLOG(LL_TRACE, "Sent DTLS msg size=%d of those bytes on the socket.", bytes);
-    }
+    ice_send_dtls(handle, in, inl);
     /* Update stats (TODO Do the same for the last second window as well)
      * FIXME: the Data stats includes the bytes used for the handshake */
     //if (bytes > 0) {
     //    component->out_stats.data.packets++;
-    //    component->out_stats.data.bytes += bytes;
+    //    component->out_stats.data.bytes += inl;
     //}
-    return bytes;
+    return inl;
 }
 
 static long dtls_bio_agent_ctrl(BIO *bio, int cmd, long num, void *ptr)

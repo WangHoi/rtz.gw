@@ -16,4 +16,6 @@ int set_nonblock(int fd, int nonblock);
 int set_cloexec(int fd, int cloexec);
 int get_socket_error(int fd);
 int set_socket_send_buf_size(int fd, int size);
+int get_socket_send_buf_size(int fd, int *size);
 int set_socket_recv_buf_size(int fd, int size);
+int set_ip_tos(int fd, int dscp_class);

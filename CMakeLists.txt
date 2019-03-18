@@ -42,7 +42,7 @@ set(rtz_SRCS
     src/net/stun.c
     src/net/ice.c
     src/net/dtls.c
-    src/net/dtls-bio.c
+    src/net/dtls_bio.c
     src/net/rtp.c
     src/net/rtcp.c
     src/net/tcp_chan_ssl.c

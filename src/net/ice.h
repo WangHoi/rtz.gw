@@ -66,13 +66,6 @@ const char *ice_get_ruser(ice_agent_t *agent);
  */
 sbuf_t *ice_get_rpass(ice_agent_t *agent);
 
-/** Generate the local candidate attribute.
- *  @param agent The ICE agent.
- *  @param b The candidate attribute line, eg:
- *      "candidate <foundation> <component> <proto> <priority> <ip> <port> typ host"
- */
-//void ice_get_local_candiate(ice_agent_t *agent, sbuf_t *b);
-
 uint32_t ice_get_ssrc(ice_agent_t *agent, int video);
 
 void ice_webrtc_hangup(ice_agent_t *handle, const char *reason);
@@ -100,3 +93,9 @@ void ice_flags_clear(ice_agent_t *agent, unsigned flag);
 int ice_flags_is_set(ice_agent_t *agent, unsigned flag);
 
 void ice_send_rtp(ice_agent_t *agent, int video, const void *data, int size);
+
+void ice_send_rtcp(ice_agent_t *agent, int video, const void *data, int size);
+
+void ice_send_dtls(ice_agent_t *agent, const void *data, int size);
+
+void ice_prepare_video_keyframe(ice_agent_t *agent);

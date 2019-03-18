@@ -48,26 +48,34 @@ enum {
     ICE_MAX_USERNAME_LENGTH = 32,
     ICE_MAX_TCP_FRAME_SIZE = 1500,
     ICE_MAX_TCP_WRITE_BUF_SIZE = 2 << 20,
+
+    MAX_PER_SEND_SIZE = 32 * 1024,
+    DSCP_CLASS_EF = 0b101110,
 };
 
-#define JANUS_ICE_PACKET_AUDIO	0
-#define JANUS_ICE_PACKET_VIDEO	1
-#define JANUS_ICE_PACKET_DATA	2
-#define JANUS_ICE_PACKET_SCTP	3
+#define ICE_PACKET_AUDIO_RTP    0
+#define ICE_PACKET_VIDEO_RTP	1
+//#define ICE_PACKET_DATA_RTP	    2
+#define ICE_PACKET_AUDIO_RTCP   3
+#define ICE_PACKET_VIDEO_RTCP	4
+//#define ICE_PACKET_DATA_RTCP	5
+#define ICE_PACKET_DTLS         6
+#define ICE_PACKET_STUN         7
+
 /* Enqueued (S)RTP/(S)RTCP packet to send */
-typedef struct ice_queued_packet {
+typedef struct ice_queued_packet_t {
     char *data;
     int length;
     int type;
-    int control;
     int retransmission;
     int encrypted;
     int64_t added;
-} ice_queued_packet;
+    struct list_head link;
+} ice_queued_packet_t;
 
-/** Janus media statistics
+/** Media statistics
  * @note To improve with more stuff */
-typedef struct ice_stats_info {
+typedef struct ice_stats_info_t {
     /** Packets sent or received */
     uint32_t packets;
     /** Bytes sent or received */
@@ -80,15 +88,15 @@ typedef struct ice_stats_info {
     int notified_lastsec;
     /** Number of NACKs sent or received */
     uint32_t nacks;
-} ice_stats_info;
+} ice_stats_info_t;
 
-/** Janus media statistics container
+/** Media statistics container
  * @note To improve with more stuff */
 typedef struct ice_stats {
     /** Audio info */
-    ice_stats_info audio;
+    ice_stats_info_t audio;
     /** Video info (considering we may be simulcasting) */
-    ice_stats_info video;
+    ice_stats_info_t video;
     /** Last time the slow_link callback (of the plugin) was called */
     int64_t last_slowlink_time;
     /** Start time of recent NACKs (for slow_link) */
@@ -122,8 +130,12 @@ struct ice_stream_t {
     ice_agent_t *agent;
     /** Audio SSRC of the server for this stream */
     uint32_t audio_ssrc;
+    /** Audio seqno */
+    uint16_t audio_seqno;
     /** Video SSRC of the server for this stream */
     uint32_t video_ssrc;
+    /** Video seqno */
+    uint16_t video_seqno;
     /** Codecs used by this stream */
     sbuf_t *audio_codec, *video_codec;
     /** RTCP context for the audio stream */
@@ -167,10 +179,11 @@ struct ice_agent_t {
     int rtcp_timer;
 
     struct sockaddr_storage peer_addr;
-    /* TODO: refactor to ice_component_t */
     tcp_chan_t *peer_tcp;
+    struct list_head pkt_list;          /* only RTP,RTCP */
+
     int cand_state;
-    int no_err_log;
+    int no_errlog;  /* Suppress error log */
     struct list_head link;
 };
 
@@ -196,13 +209,17 @@ static void rtp_handler(ice_agent_t *agent, int video, const void *data, int siz
 static ice_agent_t *find_agent_by_username(ice_server_t *srv, const char *ufrag);
 static ice_agent_t *find_agent_by_address(ice_server_t *srv, const struct sockaddr *addr,
                                           socklen_t addrlen, int tcp);
-static void ice_free_queued_packet(ice_queued_packet *pkt);
-static void ice_send_packet(ice_agent_t *agent, ice_queued_packet *pkt);
+static void ice_free_queued_packet(ice_queued_packet_t *pkt);
+static void ice_send_packet(ice_agent_t *agent, ice_queued_packet_t *pkt);
 static void rtcp_timeout_handler(zl_loop_t *loop, int id, void *udata);
 static void ice_tcp_accept_handler(tcp_srv_t *tcp_srv, tcp_chan_t *chan, void *udata);
 static void ice_tcp_data_handler(tcp_chan_t *chan, void *udata);
+static void ice_tcp_sent_handler(tcp_chan_t *chan, void *udata);
 static void ice_tcp_error_handler(tcp_chan_t *chan, int status, void *udata);
 static void ice_tcp_error_cleanup(tcp_chan_t *chan, ice_server_t *srv);
+
+static void ice_send(ice_agent_t *agent, int type, const void *data, int size);
+static void update_stats(ice_component_t *component, ice_queued_packet_t *pkt);
 
 ice_server_t *ice_server_new(zl_loop_t *loop)
 {
@@ -212,7 +229,7 @@ ice_server_t *ice_server_new(zl_loop_t *loop)
     srv->ip = sbuf_new1(16);
     sbuf_strcpy(srv->ip, "0.0.0.0");
     srv->udp_chan = udp_chan_new(loop);
-    set_socket_send_buf_size(udp_chan_fd(srv->udp_chan), 1 << 16);
+    set_ip_tos(udp_chan_fd(srv->udp_chan), DSCP_CLASS_EF);
     srv->tcp_srv = tcp_srv_new(loop);
     INIT_LIST_HEAD(&srv->agent_list);
     return srv;
@@ -237,7 +254,12 @@ void ice_server_bind(ice_server_t *srv, const char *ip, unsigned short port)
 void ice_tcp_accept_handler(tcp_srv_t *tcp_srv, tcp_chan_t *chan, void *udata)
 {
     ice_server_t *srv = udata;
-    tcp_chan_set_cb(chan, ice_tcp_data_handler, NULL, ice_tcp_error_handler, srv);
+    tcp_chan_set_cb(chan, ice_tcp_data_handler, ice_tcp_sent_handler, ice_tcp_error_handler, srv);
+    set_socket_send_buf_size(tcp_chan_fd(chan), 0);
+    int ret = set_ip_tos(tcp_chan_fd(chan), DSCP_CLASS_EF); /* EF class */
+    //int size;
+    //get_socket_send_buf_size(tcp_chan_fd(chan), &size);
+    //LLOG(LL_WARN, "new send buf size=%d", size);
 }
 
 void ice_server_start(ice_server_t *srv)
@@ -257,6 +279,7 @@ ice_agent_t *ice_agent_new(ice_server_t *srv, void *rtz_handle)
     agent->stream = ice_stream_new(agent);
     agent->rtcp_timer = -1;
     list_add(&agent->link, &srv->agent_list);
+    INIT_LIST_HEAD(&agent->pkt_list);
     LLOG(LL_TRACE, "create agent luser=%s", agent->stream->luser->data);
     return agent;
 }
@@ -289,8 +312,12 @@ ice_stream_t *ice_stream_new(ice_agent_t *handle)
     stream->remote_fingerprint = sbuf_new();
     stream->ruser = sbuf_new1(ICE_UFRAG_LENGTH + 1);
     stream->rpass = sbuf_new1(ICE_PWD_LENGTH + 1);
-    stream->audio_ssrc = (uint32_t)lrand48();
-    stream->video_ssrc = (uint32_t)lrand48();
+    do {
+        stream->audio_ssrc = (uint32_t)lrand48();
+    } while (stream->audio_ssrc < 10);
+    do {
+        stream->video_ssrc = (uint32_t)lrand48();
+    } while (stream->video_ssrc < 10);
     stream->audio_rtcp_ctx = malloc(sizeof(rtcp_context));
     memset(stream->audio_rtcp_ctx, 0, sizeof(rtcp_context));
     stream->audio_rtcp_ctx->tb = 8000;
@@ -356,13 +383,6 @@ uint32_t ice_get_ssrc(ice_agent_t *agent, int video)
 {
     return video ? agent->stream->video_ssrc : agent->stream->audio_ssrc;
 }
-
-//void ice_get_local_candiate(ice_agent_t *agent, sbuf_t *b)
-//{
-//    uint32_t priority = get_priority(ICE_CAND_TYPE_HOST, ICE_MAX_LOCAL_PREFERENCE, 1);
-//    sbuf_printf(b, "candidate %d %d %s %u %s %hu typ host",
-//                1, 1, "udp", priority, agent->srv->ip->data, agent->srv->udp_port);
-//}
 
 void ice_udp_data_handler(udp_chan_t *chan, const void *data, int size,
                           const struct sockaddr *dest_addr, socklen_t addrlen,
@@ -496,6 +516,8 @@ void stun_handler(ice_server_t *srv, const void *data, int size,
         stun_attr_msgint_add(reply_msg_hdr, agent->stream->lpass->data, agent->stream->lpass->size);
         stun_attr_fingerprint_add(reply_msg_hdr);
 
+        ice_send(agent, ICE_PACKET_STUN, reply_msg_hdr, stun_msg_len(reply_msg_hdr));
+        /*
         if (tcp_chan) {
             size_t reply_msg_len = stun_msg_len(reply_msg_hdr);
             uint8_t frame_hdr[2];
@@ -507,6 +529,7 @@ void stun_handler(ice_server_t *srv, const void *data, int size,
             udp_chan_write(srv->udp_chan, reply_msg_hdr, stun_msg_len(reply_msg_hdr),
                            addr, addrlen);
         }
+        */
     #if 0
         // STUN Request
         if (!sbuf_empty(agent->stream->rpass)) {
@@ -604,8 +627,6 @@ void srtcp_handler(ice_agent_t *agent, const void *data, int size)
     }
     /* Check if there's an RTCP BYE: in case, let's log it */
     if (rtcp_has_bye(buf, buflen)) {
-        /* Note: we used to use this as a trigger to close the PeerConnection, but not anymore
-         * Discussion here, https://groups.google.com/forum/#!topic/meetecho-janus/4XtfbYB7Jvc */
         LLOG(LL_ERROR, "Got RTCP BYE on stream %p (component %p)\n", component->stream, component);
     }
     /* Is this audio or video? */
@@ -824,9 +845,9 @@ int ice_component_send(ice_component_t *component, const void *data, int size)
 {
     ice_agent_t *agent = component->stream->agent;
     if (!agent->cand_state) {
-        if (!agent->no_err_log) {
+        if (!agent->no_errlog) {
             /* suppress error log */
-            agent->no_err_log = 1;
+            agent->no_errlog = 1;
             LLOG(LL_ERROR, "rtz_handle %p ice_agent %p component_send failed, no valid candidate pair.",
                  agent->rtz_handle, agent);
         }
@@ -905,48 +926,161 @@ int ice_flags_is_set(ice_agent_t *agent, unsigned flag)
 
 void ice_send_rtp(ice_agent_t *agent, int video, const void *data, int size)
 {
-    if (!data || size < 1)
-        return;
-    ice_queued_packet *pkt = malloc(sizeof(ice_queued_packet));
-    pkt->data = malloc(size + SRTP_MAX_TAG_LEN);
-    memcpy(pkt->data, data, size);
-    pkt->length = size;
-    pkt->type = video ? JANUS_ICE_PACKET_VIDEO : JANUS_ICE_PACKET_AUDIO;
-    pkt->control = 0;
-    pkt->encrypted = 0;
-    pkt->retransmission = 0;
-    pkt->added = zl_hrtimestamp();
-
-    ice_send_packet(agent, pkt);
+    int type = video ? ICE_PACKET_VIDEO_RTP : ICE_PACKET_AUDIO_RTP;
+    ice_send(agent, type, data, size);
 }
 
-void send_rtcp(ice_agent_t *agent, int video, const void *data, int size)
+void ice_send_rtcp(ice_agent_t *agent, int video, const void *data, int size)
 {
-    //return;
+    int type = video ? ICE_PACKET_VIDEO_RTCP : ICE_PACKET_AUDIO_RTCP;
+    ice_send(agent, type, data, size);
+}
+
+void ice_send_dtls(ice_agent_t *agent, const void *data, int size)
+{
+    ice_send(agent, ICE_PACKET_DTLS, data, size);
+}
+
+void ice_prepare_video_keyframe(ice_agent_t *agent)
+{
+    ice_queued_packet_t *pkt, *tmp;
+    int n = 0, bytes = 0;
+    list_for_each_entry_safe(pkt, tmp, &agent->pkt_list, link) {
+        ++n;
+        bytes += pkt->length;
+        ice_free_queued_packet(pkt);
+    }
+    if (n > 0)
+        LLOG(LL_TRACE, "rtz_handle %p drop %d packets, bytes=%d",
+             agent->rtz_handle, n, bytes);
+}
+
+void ice_send(ice_agent_t *agent, int type, const void *data, int size)
+{
     if (!data || size < 1)
         return;
-    ice_queued_packet *pkt = malloc(sizeof(ice_queued_packet));
+    ice_queued_packet_t *pkt = malloc(sizeof(ice_queued_packet_t));
     pkt->data = malloc(size + SRTP_MAX_TAG_LEN + 4);
     memcpy(pkt->data, data, size);
     pkt->length = size;
-    pkt->type = video ? JANUS_ICE_PACKET_VIDEO : JANUS_ICE_PACKET_AUDIO;
-    pkt->control = 1;
+    pkt->type = type;
     pkt->encrypted = 0;
     pkt->retransmission = 0;
     pkt->added = zl_hrtimestamp();
-
+    INIT_LIST_HEAD(&pkt->link); /* Allow list_del() */
     ice_send_packet(agent, pkt);
 }
 
-void ice_send_packet(ice_agent_t *agent, ice_queued_packet *pkt)
+void ice_send_packet_old(ice_agent_t *agent, ice_queued_packet_t *pkt);
+void ice_send_packet(ice_agent_t *agent, ice_queued_packet_t *pkt)
 {
-    struct sockaddr *dest_addr = (struct sockaddr*)&agent->peer_addr;
-    socklen_t dest_addrlen = sizeof(struct sockaddr_in);
     ice_stream_t *stream = agent->stream;
     ice_component_t *component = stream->component;
-    if (pkt->control) {
+    if (pkt->type == ICE_PACKET_DTLS || pkt->type == ICE_PACKET_STUN) {
+        /* Immediate send */
+        ice_component_send(component, pkt->data, pkt->length);
+        ice_free_queued_packet(pkt);
+    } else if (pkt->type == ICE_PACKET_AUDIO_RTCP || pkt->type == ICE_PACKET_VIDEO_RTCP) {
         /* RTCP */
-        int video = (pkt->type == JANUS_ICE_PACKET_VIDEO);
+        if (!component->dtls || !component->dtls->srtp_valid || !component->dtls->srtp_out) {
+            //if (!ice_flags_is_set(agent, ICE_HANDLE_WEBRTC_ALERT)/* && !component->noerrorlog*/) {
+            //    LLOG(LL_WARN, "rtz_handle %p agent %p stream component has no valid SRTP session (yet?)",
+            //         agent->rtz_handle, agent);
+            //}
+            ice_free_queued_packet(pkt);
+            return;
+        }
+
+        if (pkt->encrypted) {
+            /* Already SRTCP */
+            ice_component_send(component, pkt->data, pkt->length);
+            ice_free_queued_packet(pkt);
+        } else {
+            int plen = pkt->length;
+            int res = srtp_protect_rtcp(component->dtls->srtp_out, pkt->data, &plen);
+            //LLOG(LL_TRACE, "encrypt %d -> %d", pkt->length, protected);
+            if (res != srtp_err_status_ok) {
+                /* We don't spam the logs for every SRTP error: just take note of this, and print a summary later */
+                //handle->srtp_errors_count++;
+                //handle->last_srtp_error = res;
+                /* If we're debugging, though, print every occurrence */
+                //JANUS_LOG(LL_DEBUG, "[%"SCNu64"] ... SRTCP protect error... %s (len=%d-->%d)...\n", handle->handle_id, janus_srtp_error_str(res), pkt->length, plen);
+                return;
+            }
+            if (agent->peer_tcp && tcp_chan_get_write_buf_size(agent->peer_tcp)) {
+                /* Queue to send later. */
+                pkt->encrypted = 1;
+                pkt->length = plen;
+                list_add_tail(&pkt->link, &agent->pkt_list);
+            } else {
+                ice_component_send(component, pkt->data, plen);
+                ice_free_queued_packet(pkt);
+            }
+        }
+    } else if (pkt->type == ICE_PACKET_AUDIO_RTP || pkt->type == ICE_PACKET_VIDEO_RTP) {
+        /* RTP */
+        //stream->noerrorlog = FALSE;
+        if (!component->dtls || !component->dtls->srtp_valid || !component->dtls->srtp_out) {
+            //if (!ice_flags_is_set(agent, ICE_HANDLE_WEBRTC_ALERT)/* && !component->noerrorlog*/) {
+            //    LLOG(LL_WARN, "rtz_handle %p agent %p has no valid SRTP session (yet?)",
+            //         agent->rtz_handle, agent);
+            //}
+            ice_free_queued_packet(pkt);
+            return;
+        }
+
+        if (pkt->encrypted) {
+            /* Already SRTP */
+            ice_component_send(component, pkt->data, pkt->length);
+            update_stats(component, pkt);
+            ice_free_queued_packet(pkt);
+        } else {
+            /* Overwrite SSRC */
+            rtp_header *header = (rtp_header *)pkt->data;
+            if (!pkt->retransmission) {
+                /* ... but only if this isn't a retransmission (for those we already set it before) */
+                header->ssrc = htonl((pkt->type == ICE_PACKET_VIDEO_RTP) ? stream->video_ssrc : stream->audio_ssrc);
+            }
+
+            if (agent->peer_tcp && tcp_chan_get_write_buf_size(agent->peer_tcp)) {
+                /* Queue to send later. */
+                list_add_tail(&pkt->link, &agent->pkt_list);
+            } else {
+                /* Overwrite seqno */
+                if (!pkt->retransmission) {
+                    if (pkt->type == ICE_PACKET_VIDEO_RTP) {
+                        header->ssrc = htonl(stream->video_ssrc);
+                        header->seq_number = htons(stream->video_seqno++);
+                    } else {
+                        header->ssrc = htonl(stream->audio_ssrc);
+                        header->seq_number = htons(stream->audio_seqno++);
+                    }
+                }
+                int plen = pkt->length;
+                int res = srtp_protect(component->dtls->srtp_out, pkt->data, &plen);
+                //LLOG(LL_TRACE, "encrypt %d -> %d", pkt->length, plen);
+                if (res == srtp_err_status_ok) {
+                    ice_component_send(component, pkt->data, plen);
+                    update_stats(component, pkt);
+                }
+                ice_free_queued_packet(pkt);
+            }
+        }
+
+    } else {
+        ice_free_queued_packet(pkt);
+    }
+}
+
+void ice_send_packet_old(ice_agent_t *agent, ice_queued_packet_t *pkt)
+{
+    //struct sockaddr *dest_addr = (struct sockaddr*)&agent->peer_addr;
+    //socklen_t dest_addrlen = sizeof(struct sockaddr_in);
+    ice_stream_t *stream = agent->stream;
+    ice_component_t *component = stream->component;
+    if (pkt->type == ICE_PACKET_AUDIO_RTCP || pkt->type == ICE_PACKET_VIDEO_RTCP) {
+        /* RTCP */
+        int video = (pkt->type == ICE_PACKET_VIDEO_RTCP);
         //stream->noerrorlog = FALSE;
         if (!component->dtls || !component->dtls->srtp_valid || !component->dtls->srtp_out) {
             if (!ice_flags_is_set(agent, ICE_HANDLE_WEBRTC_ALERT)/* && !component->noerrorlog*/) {
@@ -1028,254 +1162,251 @@ void ice_send_packet(ice_agent_t *agent, ice_queued_packet *pkt)
             }
         }
         ice_free_queued_packet(pkt);
-    } else {
-        /* RTP or data */
-        if (pkt->type == JANUS_ICE_PACKET_AUDIO || pkt->type == JANUS_ICE_PACKET_VIDEO) {
-            /* RTP */
-            int video = (pkt->type == JANUS_ICE_PACKET_VIDEO);
+    } else if (pkt->type == ICE_PACKET_AUDIO_RTP || pkt->type == ICE_PACKET_VIDEO_RTP) {
+        /* RTP */
+        int video = (pkt->type == ICE_PACKET_VIDEO_RTP);
+    #if 0
+        if ((!video && !stream->audio_send) || (video && !stream->video_send)) {
+            ice_free_queued_packet(pkt);
+            return;
+        }
+    #endif
+        if (!component->dtls || !component->dtls->srtp_valid || !component->dtls->srtp_out) {
+            if (!ice_flags_is_set(agent, ICE_HANDLE_WEBRTC_ALERT)/* && !component->noerrorlog*/) {
+                //LLOG(LL_WARN, "%s stream component has no valid SRTP session (yet?)",
+                //     video ? "video" : "audio");
+                //component->noerrorlog = TRUE;	/* Don't flood with the same error all over again */
+            }
+            ice_free_queued_packet(pkt);
+            return;
+        }
+        //component->noerrorlog = FALSE;
+        if (pkt->encrypted) {
+            /* Already RTP (probably a retransmission?) */
+            rtp_header *header = (rtp_header *)pkt->data;
+            LLOG(LL_WARN, " ... Retransmitting seq.nr %"SCNu16, ntohs(header->seq_number));
         #if 0
-            if ((!video && !stream->audio_send) || (video && !stream->video_send)) {
-                ice_free_queued_packet(pkt);
-                return;
+            int sent = nice_agent_send(handle->agent, stream->stream_id, component->component_id, pkt->length, (const gchar *)pkt->data);
+            if (sent < pkt->length) {
+                JANUS_LOG(LL_ERROR, "[%"SCNu64"] ... only sent %d bytes? (was %d)\n", handle->handle_id, sent, pkt->length);
             }
         #endif
-            if (!component->dtls || !component->dtls->srtp_valid || !component->dtls->srtp_out) {
-                if (!ice_flags_is_set(agent, ICE_HANDLE_WEBRTC_ALERT)/* && !component->noerrorlog*/) {
-                    //LLOG(LL_WARN, "%s stream component has no valid SRTP session (yet?)",
-                    //     video ? "video" : "audio");
-                    //component->noerrorlog = TRUE;	/* Don't flood with the same error all over again */
-                }
-                ice_free_queued_packet(pkt);
-                return;
+        } else {
+            /* Overwrite SSRC */
+            rtp_header *header = (rtp_header *)pkt->data;
+            if (!pkt->retransmission) {
+                /* ... but only if this isn't a retransmission (for those we already set it before) */
+                header->ssrc = htonl(video ? stream->video_ssrc : stream->audio_ssrc);
             }
-            //component->noerrorlog = FALSE;
-            if (pkt->encrypted) {
-                /* Already RTP (probably a retransmission?) */
-                rtp_header *header = (rtp_header *)pkt->data;
-                LLOG(LL_WARN, " ... Retransmitting seq.nr %"SCNu16, ntohs(header->seq_number));
-            #if 0
-                int sent = nice_agent_send(handle->agent, stream->stream_id, component->component_id, pkt->length, (const gchar *)pkt->data);
-                if (sent < pkt->length) {
-                    JANUS_LOG(LL_ERROR, "[%"SCNu64"] ... only sent %d bytes? (was %d)\n", handle->handle_id, sent, pkt->length);
+        #if 0
+            /* Keep track of payload types too */
+            if (!video && stream->audio_payload_type < 0) {
+                stream->audio_payload_type = header->type;
+                if (stream->audio_codec == NULL) {
+                    const char *codec = janus_get_codec_from_pt(handle->local_sdp, stream->audio_payload_type);
+                    if (codec != NULL)
+                        stream->audio_codec = g_strdup(codec);
                 }
+            } else if (video && stream->video_payload_type < 0) {
+                stream->video_payload_type = header->type;
+                if (ice_flags_is_set(agent, JANUS_ICE_HANDLE_WEBRTC_RFC4588_RTX) &&
+                    stream->rtx_payload_types && g_hash_table_size(stream->rtx_payload_types) > 0) {
+                    stream->video_rtx_payload_type = GPOINTER_TO_INT(g_hash_table_lookup(stream->rtx_payload_types, GINT_TO_POINTER(stream->video_payload_type)));
+                    JANUS_LOG(LL_TRACE, "[%"SCNu64"] Retransmissions will have payload type %d\n",
+                                handle->handle_id, stream->video_rtx_payload_type);
+                }
+                if (stream->video_codec == NULL) {
+                    const char *codec = janus_get_codec_from_pt(handle->local_sdp, stream->video_payload_type);
+                    if (codec != NULL)
+                        stream->video_codec = g_strdup(codec);
+                }
+                if (stream->video_is_keyframe == NULL && stream->video_codec != NULL) {
+                    if (!strcasecmp(stream->video_codec, "vp8"))
+                        stream->video_is_keyframe = &janus_vp8_is_keyframe;
+                    else if (!strcasecmp(stream->video_codec, "vp9"))
+                        stream->video_is_keyframe = &janus_vp9_is_keyframe;
+                    else if (!strcasecmp(stream->video_codec, "h264"))
+                        stream->video_is_keyframe = &janus_h264_is_keyframe;
+                }
+            }
+        #endif
+        #if 0
+            /* Do we need to dump this packet for debugging? */
+            if (g_atomic_int_get(&handle->dump_packets))
+                janus_text2pcap_dump(handle->text2pcap, JANUS_TEXT2PCAP_RTP, FALSE, pkt->data, pkt->length,
+                                        "[session=%"SCNu64"][handle=%"SCNu64"]", session->session_id, handle->handle_id);
+                                /* If this is video, check if this is a keyframe: if so, we empty our retransmit buffer for incoming NACKs */
+            if (video && stream->video_is_keyframe) {
+                int plen = 0;
+                char *payload = janus_rtp_payload(pkt->data, pkt->length, &plen);
+                if (stream->video_is_keyframe(payload, plen)) {
+                    JANUS_LOG(LL_TRACE, "[%"SCNu64"] Keyframe sent, cleaning retransmit buffer\n", handle->handle_id);
+                    janus_cleanup_nack_buffer(0, stream, FALSE, TRUE);
+                }
+            }
+        #endif
+        #if 0
+            /* Before encrypting, check if we need to copy the unencrypted payload (e.g., for rtx/90000) */
+            janus_rtp_packet *p = NULL;
+            if (max_nack_queue > 0 && !pkt->retransmission && pkt->type == JANUS_ICE_PACKET_VIDEO && component->do_video_nacks &&
+                ice_flags_is_set(agent, JANUS_ICE_HANDLE_WEBRTC_RFC4588_RTX)) {
+            /* Save the packet for retransmissions that may be needed later: start by
+                * making room for two more bytes to store the original sequence number */
+                p = g_malloc(sizeof(janus_rtp_packet));
+                janus_rtp_header *header = (janus_rtp_header *)pkt->data;
+                uint16_t original_seq = header->seq_number;
+                p->data = g_malloc(pkt->length + 2);
+                p->length = pkt->length + 2;
+                /* Check where the payload starts */
+                int plen = 0;
+                char *payload = janus_rtp_payload(pkt->data, pkt->length, &plen);
+                size_t hsize = payload - pkt->data;
+                /* Copy the header first */
+                memcpy(p->data, pkt->data, hsize);
+                /* Copy the original sequence number */
+                memcpy(p->data + hsize, &original_seq, 2);
+                /* Copy the payload */
+                memcpy(p->data + hsize + 2, payload, pkt->length - hsize);
+            }
+        #endif
+            /* Encrypt SRTP */
+            int protected = pkt->length;
+            int res = srtp_protect(component->dtls->srtp_out, pkt->data, &protected);
+            if (res != srtp_err_status_ok) {
+            #if 0
+                /* We don't spam the logs for every SRTP error: just take note of this, and print a summary later */
+                handle->srtp_errors_count++;
+                handle->last_srtp_error = res;
+            #endif
+                /* If we're debugging, though, print every occurrence */
+                rtp_header *header = (rtp_header *)pkt->data;
+                uint32_t timestamp = ntohl(header->timestamp);
+                uint16_t seq = ntohs(header->seq_number);
+                LLOG(LL_DEBUG, " ... SRTP protect error... %s (len=%d-->%d, ts=%"SCNu32", seq=%"SCNu16")...",
+                        rtz_srtp_error_str(res), pkt->length, protected, timestamp, seq);
+            #if 0
+                janus_ice_free_rtp_packet(p);
             #endif
             } else {
-                /* Overwrite SSRC */
-                rtp_header *header = (rtp_header *)pkt->data;
-                if (!pkt->retransmission) {
-                    /* ... but only if this isn't a retransmission (for those we already set it before) */
-                    header->ssrc = htonl(video ? stream->video_ssrc : stream->audio_ssrc);
-                }
-            #if 0
-                /* Keep track of payload types too */
-                if (!video && stream->audio_payload_type < 0) {
-                    stream->audio_payload_type = header->type;
-                    if (stream->audio_codec == NULL) {
-                        const char *codec = janus_get_codec_from_pt(handle->local_sdp, stream->audio_payload_type);
-                        if (codec != NULL)
-                            stream->audio_codec = g_strdup(codec);
-                    }
-                } else if (video && stream->video_payload_type < 0) {
-                    stream->video_payload_type = header->type;
-                    if (ice_flags_is_set(agent, JANUS_ICE_HANDLE_WEBRTC_RFC4588_RTX) &&
-                        stream->rtx_payload_types && g_hash_table_size(stream->rtx_payload_types) > 0) {
-                        stream->video_rtx_payload_type = GPOINTER_TO_INT(g_hash_table_lookup(stream->rtx_payload_types, GINT_TO_POINTER(stream->video_payload_type)));
-                        JANUS_LOG(LL_TRACE, "[%"SCNu64"] Retransmissions will have payload type %d\n",
-                                  handle->handle_id, stream->video_rtx_payload_type);
-                    }
-                    if (stream->video_codec == NULL) {
-                        const char *codec = janus_get_codec_from_pt(handle->local_sdp, stream->video_payload_type);
-                        if (codec != NULL)
-                            stream->video_codec = g_strdup(codec);
-                    }
-                    if (stream->video_is_keyframe == NULL && stream->video_codec != NULL) {
-                        if (!strcasecmp(stream->video_codec, "vp8"))
-                            stream->video_is_keyframe = &janus_vp8_is_keyframe;
-                        else if (!strcasecmp(stream->video_codec, "vp9"))
-                            stream->video_is_keyframe = &janus_vp9_is_keyframe;
-                        else if (!strcasecmp(stream->video_codec, "h264"))
-                            stream->video_is_keyframe = &janus_h264_is_keyframe;
-                    }
-                }
-            #endif
-            #if 0
-                /* Do we need to dump this packet for debugging? */
-                if (g_atomic_int_get(&handle->dump_packets))
-                    janus_text2pcap_dump(handle->text2pcap, JANUS_TEXT2PCAP_RTP, FALSE, pkt->data, pkt->length,
-                                         "[session=%"SCNu64"][handle=%"SCNu64"]", session->session_id, handle->handle_id);
-                                 /* If this is video, check if this is a keyframe: if so, we empty our retransmit buffer for incoming NACKs */
-                if (video && stream->video_is_keyframe) {
-                    int plen = 0;
-                    char *payload = janus_rtp_payload(pkt->data, pkt->length, &plen);
-                    if (stream->video_is_keyframe(payload, plen)) {
-                        JANUS_LOG(LL_TRACE, "[%"SCNu64"] Keyframe sent, cleaning retransmit buffer\n", handle->handle_id);
-                        janus_cleanup_nack_buffer(0, stream, FALSE, TRUE);
-                    }
-                }
-            #endif
-            #if 0
-                /* Before encrypting, check if we need to copy the unencrypted payload (e.g., for rtx/90000) */
-                janus_rtp_packet *p = NULL;
-                if (max_nack_queue > 0 && !pkt->retransmission && pkt->type == JANUS_ICE_PACKET_VIDEO && component->do_video_nacks &&
-                    ice_flags_is_set(agent, JANUS_ICE_HANDLE_WEBRTC_RFC4588_RTX)) {
-                /* Save the packet for retransmissions that may be needed later: start by
-                 * making room for two more bytes to store the original sequence number */
-                    p = g_malloc(sizeof(janus_rtp_packet));
-                    janus_rtp_header *header = (janus_rtp_header *)pkt->data;
-                    uint16_t original_seq = header->seq_number;
-                    p->data = g_malloc(pkt->length + 2);
-                    p->length = pkt->length + 2;
-                    /* Check where the payload starts */
-                    int plen = 0;
-                    char *payload = janus_rtp_payload(pkt->data, pkt->length, &plen);
-                    size_t hsize = payload - pkt->data;
-                    /* Copy the header first */
-                    memcpy(p->data, pkt->data, hsize);
-                    /* Copy the original sequence number */
-                    memcpy(p->data + hsize, &original_seq, 2);
-                    /* Copy the payload */
-                    memcpy(p->data + hsize + 2, payload, pkt->length - hsize);
-                }
-            #endif
-                /* Encrypt SRTP */
-                int protected = pkt->length;
-                int res = srtp_protect(component->dtls->srtp_out, pkt->data, &protected);
-                if (res != srtp_err_status_ok) {
-                #if 0
-                    /* We don't spam the logs for every SRTP error: just take note of this, and print a summary later */
-                    handle->srtp_errors_count++;
-                    handle->last_srtp_error = res;
-                #endif
-                    /* If we're debugging, though, print every occurrence */
+                rtp_header *hdr = (rtp_header*)pkt->data;
+                //LLOG(LL_TRACE, "send m=%d ts=%d size=%d", (int)hdr->markerbit, ntohl(hdr->timestamp), protected);
+                /* Shoot! */
+                int sent = ice_component_send(component, pkt->data, protected);
+                //if (sent < protected) {
+                //    LLOG(LL_ERROR, " ... only sent %d bytes? (was %d), err: %s", sent, protected, strerror(errno));
+                //}
+                /* Update stats */
+                if (sent > 0) {
+                    /* Update the RTCP context as well */
                     rtp_header *header = (rtp_header *)pkt->data;
                     uint32_t timestamp = ntohl(header->timestamp);
-                    uint16_t seq = ntohs(header->seq_number);
-                    LLOG(LL_DEBUG, " ... SRTP protect error... %s (len=%d-->%d, ts=%"SCNu32", seq=%"SCNu16")...",
-                         rtz_srtp_error_str(res), pkt->length, protected, timestamp, seq);
-                #if 0
-                    janus_ice_free_rtp_packet(p);
-                #endif
-                } else {
-                    rtp_header *hdr = (rtp_header*)pkt->data;
-                    //LLOG(LL_TRACE, "send m=%d ts=%d size=%d", (int)hdr->markerbit, ntohl(hdr->timestamp), protected);
-                    /* Shoot! */
-                    int sent = ice_component_send(component, pkt->data, protected);
-                    //if (sent < protected) {
-                    //    LLOG(LL_ERROR, " ... only sent %d bytes? (was %d), err: %s", sent, protected, strerror(errno));
-                    //}
-                    /* Update stats */
-                    if (sent > 0) {
-                        /* Update the RTCP context as well */
-                        rtp_header *header = (rtp_header *)pkt->data;
-                        uint32_t timestamp = ntohl(header->timestamp);
-                        if (pkt->type == JANUS_ICE_PACKET_AUDIO) {
-                            component->out_stats.audio.packets++;
-                            component->out_stats.audio.bytes += pkt->length;
-                            /* Last second outgoing audio */
-                            long long now = zl_hrtimestamp();
-                            if (component->out_stats.audio.updated == 0)
-                                component->out_stats.audio.updated = now;
-                            if (now > component->out_stats.audio.updated &&
-                                now - component->out_stats.audio.updated >= ZL_USEC_PER_SEC) {
-                                component->out_stats.audio.bytes_lastsec = component->out_stats.audio.bytes_lastsec_temp;
-                                component->out_stats.audio.bytes_lastsec_temp = 0;
-                                component->out_stats.audio.updated = now;
-                            }
-                            component->out_stats.audio.bytes_lastsec_temp += pkt->length;
-                            stream->audio_last_ts = timestamp;
-                            if (stream->audio_first_ntp_ts == 0) {
-                                struct timeval tv;
-                                gettimeofday(&tv, NULL);
-                                stream->audio_first_ntp_ts = (int64_t)tv.tv_sec * ZL_USEC_PER_SEC + tv.tv_usec;
-                                stream->audio_first_rtp_ts = timestamp;
-                            }
-                            /* Let's check if this was G.711: in case we may need to change the timestamp base */
-                            rtcp_context *rtcp_ctx = stream->audio_rtcp_ctx;
-                            int pt = header->type;
-                            if ((pt == 0 || pt == 8) && (rtcp_ctx->tb == 48000))
-                                rtcp_ctx->tb = 8000;
-                        } else if (pkt->type == JANUS_ICE_PACKET_VIDEO) {
-                            component->out_stats.video.packets++;
-                            component->out_stats.video.bytes += pkt->length;
-                            /* Last second outgoing video */
-                            long long now = zl_hrtimestamp();
-                            if (component->out_stats.video.updated == 0)
-                                component->out_stats.video.updated = now;
-                            if (now > component->out_stats.video.updated &&
-                                now - component->out_stats.video.updated >= ZL_USEC_PER_SEC) {
-                                component->out_stats.video.bytes_lastsec = component->out_stats.video.bytes_lastsec_temp;
-                                component->out_stats.video.bytes_lastsec_temp = 0;
-                                component->out_stats.video.updated = now;
-                            }
-                            component->out_stats.video.bytes_lastsec_temp += pkt->length;
-                            stream->video_last_ts = timestamp;
-                            if (stream->video_first_ntp_ts == 0) {
-                                struct timeval tv;
-                                gettimeofday(&tv, NULL);
-                                stream->video_first_ntp_ts = (int64_t)tv.tv_sec * ZL_USEC_PER_SEC + tv.tv_usec;
-                                stream->video_first_rtp_ts = timestamp;
-                            }
+                    if (pkt->type == ICE_PACKET_AUDIO_RTP) {
+                        component->out_stats.audio.packets++;
+                        component->out_stats.audio.bytes += pkt->length;
+                        /* Last second outgoing audio */
+                        long long now = zl_hrtimestamp();
+                        if (component->out_stats.audio.updated == 0)
+                            component->out_stats.audio.updated = now;
+                        if (now > component->out_stats.audio.updated &&
+                            now - component->out_stats.audio.updated >= ZL_USEC_PER_SEC) {
+                            component->out_stats.audio.bytes_lastsec = component->out_stats.audio.bytes_lastsec_temp;
+                            component->out_stats.audio.bytes_lastsec_temp = 0;
+                            component->out_stats.audio.updated = now;
                         }
-                        /* Update sent packets counter */
-                        rtcp_context *rtcp_ctx = video ? stream->video_rtcp_ctx : stream->audio_rtcp_ctx;
-                        ++rtcp_ctx->sent_packets_since_last_rr;
+                        component->out_stats.audio.bytes_lastsec_temp += pkt->length;
+                        stream->audio_last_ts = timestamp;
+                        if (stream->audio_first_ntp_ts == 0) {
+                            struct timeval tv;
+                            gettimeofday(&tv, NULL);
+                            stream->audio_first_ntp_ts = (int64_t)tv.tv_sec * ZL_USEC_PER_SEC + tv.tv_usec;
+                            stream->audio_first_rtp_ts = timestamp;
+                        }
+                        /* Let's check if this was G.711: in case we may need to change the timestamp base */
+                        rtcp_context *rtcp_ctx = stream->audio_rtcp_ctx;
+                        int pt = header->type;
+                        if ((pt == 0 || pt == 8) && (rtcp_ctx->tb == 48000))
+                            rtcp_ctx->tb = 8000;
+                    } else if (pkt->type == ICE_PACKET_VIDEO_RTP) {
+                        component->out_stats.video.packets++;
+                        component->out_stats.video.bytes += pkt->length;
+                        /* Last second outgoing video */
+                        long long now = zl_hrtimestamp();
+                        if (component->out_stats.video.updated == 0)
+                            component->out_stats.video.updated = now;
+                        if (now > component->out_stats.video.updated &&
+                            now - component->out_stats.video.updated >= ZL_USEC_PER_SEC) {
+                            component->out_stats.video.bytes_lastsec = component->out_stats.video.bytes_lastsec_temp;
+                            component->out_stats.video.bytes_lastsec_temp = 0;
+                            component->out_stats.video.updated = now;
+                        }
+                        component->out_stats.video.bytes_lastsec_temp += pkt->length;
+                        stream->video_last_ts = timestamp;
+                        if (stream->video_first_ntp_ts == 0) {
+                            struct timeval tv;
+                            gettimeofday(&tv, NULL);
+                            stream->video_first_ntp_ts = (int64_t)tv.tv_sec * ZL_USEC_PER_SEC + tv.tv_usec;
+                            stream->video_first_rtp_ts = timestamp;
+                        }
                     }
-                #if 0
-                    if (max_nack_queue > 0 && !pkt->retransmission) {
-                        /* Save the packet for retransmissions that may be needed later */
-                        if ((pkt->type == JANUS_ICE_PACKET_AUDIO && !component->do_audio_nacks) ||
-                            (pkt->type == JANUS_ICE_PACKET_VIDEO && !component->do_video_nacks)) {
-                        /* ... unless NACKs are disabled for this medium */
-                            ice_free_queued_packet(pkt);
-                            return G_SOURCE_CONTINUE;
-                        }
-                        if (p == NULL) {
-                            /* If we're not doing RFC4588, we're saving the SRTP packet as it is */
-                            p = g_malloc(sizeof(janus_rtp_packet));
-                            p->data = g_malloc(protected);
-                            memcpy(p->data, pkt->data, protected);
-                            p->length = protected;
-                        }
-                        p->created = janus_get_monotonic_time();
-                        p->last_retransmit = 0;
-                        janus_rtp_header *header = (janus_rtp_header *)pkt->data;
-                        uint16_t seq = ntohs(header->seq_number);
-                        if (!video) {
-                            if (component->audio_retransmit_buffer == NULL) {
-                                component->audio_retransmit_buffer = g_queue_new();
-                                component->audio_retransmit_seqs = g_hash_table_new(NULL, NULL);
-                            }
-                            g_queue_push_tail(component->audio_retransmit_buffer, p);
-                            /* Insert in the table too, for quick lookup */
-                            g_hash_table_insert(component->audio_retransmit_seqs, GUINT_TO_POINTER(seq), p);
-                        } else {
-                            if (component->video_retransmit_buffer == NULL) {
-                                component->video_retransmit_buffer = g_queue_new();
-                                component->video_retransmit_seqs = g_hash_table_new(NULL, NULL);
-                            }
-                            g_queue_push_tail(component->video_retransmit_buffer, p);
-                            /* Insert in the table too, for quick lookup */
-                            g_hash_table_insert(component->video_retransmit_seqs, GUINT_TO_POINTER(seq), p);
-                        }
-                    } else {
-                        janus_ice_free_rtp_packet(p);
-                    }
-                #endif
+                    /* Update sent packets counter */
+                    rtcp_context *rtcp_ctx = video ? stream->video_rtcp_ctx : stream->audio_rtcp_ctx;
+                    ++rtcp_ctx->sent_packets_since_last_rr;
                 }
+            #if 0
+                if (max_nack_queue > 0 && !pkt->retransmission) {
+                    /* Save the packet for retransmissions that may be needed later */
+                    if ((pkt->type == JANUS_ICE_PACKET_AUDIO && !component->do_audio_nacks) ||
+                        (pkt->type == JANUS_ICE_PACKET_VIDEO && !component->do_video_nacks)) {
+                    /* ... unless NACKs are disabled for this medium */
+                        ice_free_queued_packet(pkt);
+                        return G_SOURCE_CONTINUE;
+                    }
+                    if (p == NULL) {
+                        /* If we're not doing RFC4588, we're saving the SRTP packet as it is */
+                        p = g_malloc(sizeof(janus_rtp_packet));
+                        p->data = g_malloc(protected);
+                        memcpy(p->data, pkt->data, protected);
+                        p->length = protected;
+                    }
+                    p->created = janus_get_monotonic_time();
+                    p->last_retransmit = 0;
+                    janus_rtp_header *header = (janus_rtp_header *)pkt->data;
+                    uint16_t seq = ntohs(header->seq_number);
+                    if (!video) {
+                        if (component->audio_retransmit_buffer == NULL) {
+                            component->audio_retransmit_buffer = g_queue_new();
+                            component->audio_retransmit_seqs = g_hash_table_new(NULL, NULL);
+                        }
+                        g_queue_push_tail(component->audio_retransmit_buffer, p);
+                        /* Insert in the table too, for quick lookup */
+                        g_hash_table_insert(component->audio_retransmit_seqs, GUINT_TO_POINTER(seq), p);
+                    } else {
+                        if (component->video_retransmit_buffer == NULL) {
+                            component->video_retransmit_buffer = g_queue_new();
+                            component->video_retransmit_seqs = g_hash_table_new(NULL, NULL);
+                        }
+                        g_queue_push_tail(component->video_retransmit_buffer, p);
+                        /* Insert in the table too, for quick lookup */
+                        g_hash_table_insert(component->video_retransmit_seqs, GUINT_TO_POINTER(seq), p);
+                    }
+                } else {
+                    janus_ice_free_rtp_packet(p);
+                }
+            #endif
             }
-            ice_free_queued_packet(pkt);
-        } else {
-            LLOG(LL_WARN, "Unsupported packet type %d", pkt->type);
-            ice_free_queued_packet(pkt);
         }
+        ice_free_queued_packet(pkt);
+    } else {
+        LLOG(LL_WARN, "Unsupported packet type %d", pkt->type);
+        ice_free_queued_packet(pkt);
     }
 }
 
-void ice_free_queued_packet(ice_queued_packet *pkt)
+void ice_free_queued_packet(ice_queued_packet_t *pkt)
 {
-    if (pkt == NULL) {
+    if (!pkt)
         return;
-    }
+    list_del(&pkt->link);
     free(pkt->data);
     free(pkt);
 }
@@ -1327,7 +1458,7 @@ void rtcp_timeout_handler(zl_loop_t *loop, int id, void *udata)
         rtcp_sdes *sdes = (rtcp_sdes *)&rtcpbuf[28];
         rtcp_sdes_cname((char *)sdes, sdeslen, "rtzvideo", 8);
         sdes->chunk.ssrc = htonl(stream->video_ssrc);
-        send_rtcp(handle, 1, rtcpbuf, srlen + sdeslen);
+        ice_send_rtcp(handle, 1, rtcpbuf, srlen + sdeslen);
     }
     /* DO NOT send Audio SR, inaccurate timestamp will cause A/V sync issue in chrome */
 #if 0
@@ -1367,7 +1498,7 @@ void rtcp_timeout_handler(zl_loop_t *loop, int id, void *udata)
         rtcp_sdes *sdes = (rtcp_sdes *)&rtcpbuf[28];
         rtcp_sdes_cname((char *)sdes, sdeslen, "rtzaudio", 8);
         sdes->chunk.ssrc = htonl(stream->audio_ssrc);
-        send_rtcp(handle, 0, rtcpbuf, srlen + sdeslen);
+        ice_send_rtcp(handle, 0, rtcpbuf, srlen + sdeslen);
     }
 #endif
 }
@@ -1379,7 +1510,7 @@ void ice_tcp_error_cleanup(tcp_chan_t *chan, ice_server_t *srv)
         if (agent->peer_tcp == chan) {
             agent->peer_tcp = NULL;
             agent->cand_state = ICE_CAND_STATE_EMPTY;
-            agent->no_err_log = 0;
+            agent->no_errlog = 0;
             //ice_webrtc_hangup(agent, "TcpSocket Error");
         }
     }
@@ -1426,7 +1557,125 @@ void ice_tcp_data_handler(tcp_chan_t *chan, void *udata)
     }
 }
 
+void ice_tcp_sent_handler(tcp_chan_t *chan, void *udata)
+{
+    int qlen = tcp_chan_get_write_buf_size(chan);
+    if (qlen > 0)
+        return;
+
+    ice_server_t *srv = udata;
+    struct sockaddr_in addr_in;
+    struct sockaddr *addr = (struct sockaddr*)&addr_in;
+    int addrlen = sizeof(struct sockaddr_in);
+    tcp_chan_get_peername(chan, addr, addrlen);
+    ice_agent_t *agent = find_agent_by_address(srv, addr, addrlen, 1);
+    if (!agent)
+        return;
+
+    ice_stream_t *stream = agent->stream;
+    ice_component_t *component = stream->component;
+    ice_queued_packet_t *pkt, *tmp;
+    int n = 0, bytes = 0;
+    list_for_each_entry_safe(pkt, tmp, &agent->pkt_list, link) {
+        /* Overwrite seqno */
+        if (!pkt->retransmission) {
+            rtp_header *header = (rtp_header*)pkt->data;
+            if (pkt->type == ICE_PACKET_VIDEO_RTP)
+                header->seq_number = htons(stream->video_seqno++);
+            else
+                header->seq_number = htons(stream->audio_seqno++);
+            if (!pkt->encrypted) {
+                int plen = pkt->length;
+                int res;
+                if (pkt->type == ICE_PACKET_AUDIO_RTP || pkt->type == ICE_PACKET_VIDEO_RTP)
+                    res = srtp_protect(component->dtls->srtp_out, pkt->data, &plen);
+                else if (pkt->type == ICE_PACKET_AUDIO_RTCP || pkt->type == ICE_PACKET_VIDEO_RTCP)
+                    res = srtp_protect_rtcp(component->dtls->srtp_out, pkt->data, &plen);
+                //LLOG(LL_TRACE, "encrypt %d -> %d", pkt->length, plen);
+                if (res == srtp_err_status_ok) {
+                    pkt->encrypted = 1;
+                    pkt->length = plen;
+                } else {
+                    ice_free_queued_packet(pkt);
+                    continue;
+                }
+            }
+        }
+
+        ++n;
+        bytes += pkt->length;
+        ice_component_send(component, pkt->data, pkt->length);
+        update_stats(component, pkt);
+        ice_free_queued_packet(pkt);
+        if (bytes > MAX_PER_SEND_SIZE)
+            break;
+    }
+    //if (n > 0)
+    //    LLOG(LL_TRACE, "sent %d pkts, bytes=%d", n, bytes);
+}
+
 void ice_tcp_error_handler(tcp_chan_t *chan, int status, void *udata)
 {
     ice_tcp_error_cleanup(chan, udata);
+}
+
+/** Update stats */
+void update_stats(ice_component_t *component, ice_queued_packet_t *pkt)
+{
+    /* Update the RTCP context as well */
+    ice_stream_t *stream = component->stream;
+    rtp_header *header = (rtp_header*)pkt->data;
+    uint32_t timestamp = ntohl(header->timestamp);
+    if (pkt->type == ICE_PACKET_AUDIO_RTP) {
+        component->out_stats.audio.packets++;
+        component->out_stats.audio.bytes += pkt->length;
+        /* Last second outgoing audio */
+        long long now = zl_hrtimestamp();
+        if (component->out_stats.audio.updated == 0)
+            component->out_stats.audio.updated = now;
+        if (now > component->out_stats.audio.updated &&
+            now - component->out_stats.audio.updated >= ZL_USEC_PER_SEC) {
+            component->out_stats.audio.bytes_lastsec = component->out_stats.audio.bytes_lastsec_temp;
+            component->out_stats.audio.bytes_lastsec_temp = 0;
+            component->out_stats.audio.updated = now;
+        }
+        component->out_stats.audio.bytes_lastsec_temp += pkt->length;
+        stream->audio_last_ts = timestamp;
+        if (stream->audio_first_ntp_ts == 0) {
+            struct timeval tv;
+            gettimeofday(&tv, NULL);
+            stream->audio_first_ntp_ts = (int64_t)tv.tv_sec * ZL_USEC_PER_SEC + tv.tv_usec;
+            stream->audio_first_rtp_ts = timestamp;
+        }
+        /* Let's check if this was G.711: in case we may need to change the timestamp base */
+        rtcp_context *rtcp_ctx = stream->audio_rtcp_ctx;
+        int pt = header->type;
+        if ((pt == 0 || pt == 8) && (rtcp_ctx->tb == 48000))
+            rtcp_ctx->tb = 8000;
+        /* Update sent packets counter */
+        ++rtcp_ctx->sent_packets_since_last_rr;
+    } else if (pkt->type == ICE_PACKET_VIDEO_RTP) {
+        component->out_stats.video.packets++;
+        component->out_stats.video.bytes += pkt->length;
+        /* Last second outgoing video */
+        long long now = zl_hrtimestamp();
+        if (component->out_stats.video.updated == 0)
+            component->out_stats.video.updated = now;
+        if (now > component->out_stats.video.updated &&
+            now - component->out_stats.video.updated >= ZL_USEC_PER_SEC) {
+            component->out_stats.video.bytes_lastsec = component->out_stats.video.bytes_lastsec_temp;
+            component->out_stats.video.bytes_lastsec_temp = 0;
+            component->out_stats.video.updated = now;
+        }
+        component->out_stats.video.bytes_lastsec_temp += pkt->length;
+        stream->video_last_ts = timestamp;
+        if (stream->video_first_ntp_ts == 0) {
+            struct timeval tv;
+            gettimeofday(&tv, NULL);
+            stream->video_first_ntp_ts = (int64_t)tv.tv_sec * ZL_USEC_PER_SEC + tv.tv_usec;
+            stream->video_first_rtp_ts = timestamp;
+        }
+        /* Update sent packets counter */
+        ++stream->video_rtcp_ctx->sent_packets_since_last_rr;
+    }
 }
