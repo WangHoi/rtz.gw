@@ -123,7 +123,7 @@ typedef struct rtz_session_t {
     rtz_server_t *srv;
     http_peer_t *peer;
     sbuf_t *id;
-    struct list_head link;
+    struct list_head link;          /* link to rtz_server_t.session_list */
     struct list_head handle_list;
 } rtz_session_t;
 
@@ -139,7 +139,7 @@ typedef struct rtz_handle_t {
     int flag;
     int sdp_version;
     uint16_t min_playout_delay;     /* frames: nodelay:0, balanced:8, smooth:16 */
-    struct list_head link;
+    struct list_head link;          /* link to rtz_session_t.handle_list */
     struct list_head stream_link;   /* link to rtz_stream_t.handle_list */
 } rtz_handle_t;
 
@@ -1138,6 +1138,25 @@ void rtz_hangup(void *rtz_handle)
         zl_defer(handle->session->srv->loop, ice_agent_defer_del, 0, handle->ice);
         handle->ice = NULL;
     }
+}
+
+int rtz_get_server_load(rtz_server_t *srv)
+{
+    if (!srv)
+        return 0;
+    int load = 0;
+    rtz_stream_t *stream;
+    list_for_each_entry(stream, &srv->stream_list, link) {
+        ++load;
+    }
+    rtz_session_t *session;
+    rtz_handle_t *handle;
+    list_for_each_entry(session, &srv->session_list, link) {
+        list_for_each_entry(handle, &session->handle_list, link) {
+            ++load;
+        }
+    }
+    return load;
 }
 
 /* Write 12 bit min_playout_delay in 10ms granularity */

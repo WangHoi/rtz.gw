@@ -1,4 +1,4 @@
-{
+﻿{
 	"configurations": [
         {
             "name": "Linux",
@@ -13,7 +13,7 @@
             "remoteInstallRoot": "/var/tmp/build/${workspaceHash}/install/${name}",
             "remoteCopySources": true,
             "remoteCopySourcesOutputVerbosity": "Normal",
-            "remoteCopySourcesConcurrentCopies": "10",
+            "remoteCopySourcesConcurrentCopies": "2",
             "remoteCopySourcesMethod": "rsync",
             "remoteCopySourcesExclusionList": [
                 ".vs",

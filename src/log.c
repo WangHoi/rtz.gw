@@ -1,4 +1,4 @@
-#include "log.h"
+﻿#include "log.h"
 #include "macro_util.h"
 #include "mpsc_queue.h"
 #include "sbuf.h"
@@ -97,6 +97,18 @@ void llog_fmt(const char* filename, int fileline, const char* funcname, enum Log
 
     sbuf_appendc(b, '\n');
 
+    m->u64[0] = (uint64_t)b;
+    mpsc_commit(m, LOG_MSG_DATA);
+    llog_notify();
+}
+
+void llog_raw(const char *msg)
+{
+    struct mpsc_msg *m = mpsc_reserve(mq);
+    if (!m)
+        return;
+    sbuf_t *b = sbuf_strdup(msg);
+    sbuf_appendc(b, '\n');
     m->u64[0] = (uint64_t)b;
     mpsc_commit(m, LOG_MSG_DATA);
     llog_notify();

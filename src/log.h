@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 enum LogLevel {
 	LL_FATAL,
@@ -11,8 +11,8 @@ enum LogLevel {
 
 void llog_set_level(enum LogLevel lvl);
 #define LLOG(lvl, fmt, ...) llog_fmt(__FILE__, __LINE__, __FUNCTION__, lvl, fmt, ##__VA_ARGS__)
-void llog_fmt(const char* filename, int fileline, const char* funcname, enum LogLevel lvl,
-	          const char* fmt, ...) __attribute__((format(printf, 5, 6)));
-
+void llog_fmt(const char *filename, int fileline, const char* funcname, enum LogLevel lvl,
+	          const char *fmt, ...) __attribute__((format(printf, 5, 6)));
+void llog_raw(const char *msg);
 void llog_init(int console, const char *fname);
 void llog_cleanup();

@@ -1,10 +1,15 @@
-#include "sbuf.h"
+﻿#include "sbuf.h"
 #include "macro_util.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <memory.h>
 #include <strings.h>
+
+static inline int sbuf_roundup_capacity(int capacity)
+{
+    return (capacity + 15) & ~15;
+}
 
 sbuf_t *sbuf_new()
 {
@@ -15,6 +20,7 @@ sbuf_t *sbuf_new1(int capacity)
 {
     if (capacity < 16)
         capacity = 16;
+    capacity = sbuf_roundup_capacity(capacity);
     sbuf_t *s = malloc(sizeof(sbuf_t));
     s->data = malloc(capacity);
     s->data[0] = 0;
@@ -102,6 +108,7 @@ char *sbuf_tail(sbuf_t *dst)
 void sbuf_reserve(sbuf_t *dst, int capacity)
 {
     if (dst->capacity < capacity) {
+        capacity = sbuf_roundup_capacity(capacity);
         dst->capacity = capacity;
         dst->data = realloc(dst->data, capacity);
     }

@@ -2,8 +2,8 @@
 #include "sbuf.h"
 #include "event_loop.h"
 #include "log.h"
+#include "net/rtz_server.h"
 #include <zookeeper/zookeeper.h>
-#include <pthread.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
@@ -15,10 +15,18 @@ extern int RTZ_PUBLIC_SIGNAL_PORT;
 extern int RTMP_PUBLIC_PORT;
 extern int RTMP_LOCAL_PORT;
 
-pthread_t tid;
-volatile int started = 0;
+extern rtz_server_t *g_rtz_srv;
 
-static void *zk_thread_entry(void *);
+static zl_loop_t *zloop = NULL;
+static zhandle_t *handle = NULL;
+static volatile int connected = 0;
+static int ztimer = -1;
+static sbuf_t *rtz_real_path = NULL;
+static const char *RTZ_SERVICE_NAME = "/avideo/mse/load/";
+static const char *RTMP_SERVICE_NAME = "/avideo/srs/load/";
+static const int RECV_TIMEOUT_MSECS = 30000;
+static const int UPDATE_TIMEOUT_MSECS = 10000;
+
 static void zk_watch(zhandle_t *zzh, int type, int state, const char *path, void* ctx);
 static void zk_mkdir(zhandle_t *handle, const char *service_name, sbuf_t *real_path,
                      const char *public_ip, int public_port,
@@ -26,20 +34,32 @@ static void zk_mkdir(zhandle_t *handle, const char *service_name, sbuf_t *real_p
 static void zk_update(zhandle_t *handle, const char *real_path,
                       const char *public_ip, int public_port,
                       const char *local_ip, int local_port);
+static void zk_timeout_handler(zl_loop_t *loop, int id, void *udata);
 
-void start_zk_thread()
+static void zk_log_handler(const char *message);
+
+void start_zk_registry(zl_loop_t *loop)
 {
-    pthread_create(&tid, NULL, zk_thread_entry, NULL);
-    while (!started)
-        pthread_yield();
+    zloop = loop;
+    rtz_real_path = sbuf_new();
+    handle = zookeeper_init2(ZK_HOST, &zk_watch, RECV_TIMEOUT_MSECS, NULL, (void*)&connected, 0, zk_log_handler);
+    zk_mkdir(handle, RTZ_SERVICE_NAME, rtz_real_path,
+             RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT,
+             RTZ_LOCAL_IP, RTMP_LOCAL_PORT);
+    ztimer = zl_timer_start(loop, UPDATE_TIMEOUT_MSECS, UPDATE_TIMEOUT_MSECS, zk_timeout_handler, NULL);
 }
 
-void stop_zk_thread()
+void stop_zk_registry()
 {
-    if (!started)
-        return;
-    started = 0;
-    pthread_join(tid, NULL);
+    zl_timer_stop(zloop, ztimer);
+    ztimer = -1;
+    sbuf_del(rtz_real_path);
+    rtz_real_path = NULL;
+    if (handle) {
+        zookeeper_close(handle);
+        handle = NULL;
+    }
+    connected = 0;
 }
 
 void zk_mkdir(zhandle_t *handle, const char *service_name, sbuf_t *real_path,
@@ -81,47 +101,6 @@ void zk_mkdir(zhandle_t *handle, const char *service_name, sbuf_t *real_path,
     sbuf_del(mid_node);
 }
 
-void *zk_thread_entry(void *arg)
-{
-    const char *RTZ_SERVICE_NAME = "/avideo/mse/load/";
-    const char *RTMP_SERVICE_NAME = "/avideo/srs/load/";
-    const int RECV_TIMEOUT_MSECS = 30000;
-    int connected = 0, ret;
-
-    zhandle_t *handle = NULL;
-    sbuf_t *rtz_real_path = sbuf_new();
-    sbuf_t *rtmp_real_path = sbuf_new();
-    started = 1;
-
-    handle = zookeeper_init(ZK_HOST, &zk_watch, RECV_TIMEOUT_MSECS, NULL, &connected, 0);
-    zk_mkdir(handle, RTZ_SERVICE_NAME, rtz_real_path,
-             RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT,
-             RTZ_LOCAL_IP, RTMP_LOCAL_PORT);
-    //zk_mkdir(handle, RTMP_SERVICE_NAME, rtmp_real_path);
-
-    long long update_ts = zl_timestamp();
-    //zk_update(handle, rtz_real_path->data);
-    while (started) {
-        sleep(1);
-        long long ts = zl_timestamp();
-        if (ts > update_ts + 30000) {
-            update_ts = ts;
-            zk_update(handle, rtz_real_path->data,
-                      RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT,
-                      RTZ_LOCAL_IP, RTMP_LOCAL_PORT);
-            /*
-            zk_update(handle, rtmp_real_path->data,
-                      RTZ_PUBLIC_IP, RTMP_PUBLIC_PORT,
-                      RTZ_LOCAL_IP, RTMP_LOCAL_PORT);
-                      */
-        }
-    }
-
-    zookeeper_close(handle);
-    sbuf_del(rtz_real_path);
-    sbuf_del(rtmp_real_path);
-    return NULL;
-}
 
 void zk_watch(zhandle_t *zzh, int type, int state, const char *path, void* ctx)
 {
@@ -146,11 +125,24 @@ void zk_update(zhandle_t *handle, const char *real_path,
     char text[1024];
     unsigned short PORT = 6060;
     snprintf(text, sizeof(text), "{\"public_host\": \"%s:%d\",\"local_host\": \"%s:%d\", \"load\": %d}",
-             public_ip, public_port, local_ip, local_port, 0);
+             public_ip, public_port, local_ip, local_port, rtz_get_server_load(g_rtz_srv));
     int ret = zoo_set(handle, real_path, text, strlen(text), -1);
     if (ret != ZOK) {
         LLOG(LL_ERROR, "zoo_set error %d", ret);
     } else {
         //LLOG(LL_TRACE, "zoo_set ok");
     }
+}
+
+void zk_timeout_handler(zl_loop_t *loop, int id, void *udata)
+{
+    if (connected)
+        zk_update(handle, rtz_real_path->data,
+                  RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT,
+                  RTZ_LOCAL_IP, RTMP_LOCAL_PORT);
+}
+
+void zk_log_handler(const char *message)
+{
+    llog_raw(message);
 }

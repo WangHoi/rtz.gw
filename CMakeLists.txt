@@ -1,12 +1,15 @@
-cmake_minimum_required(VERSION 3.10)
+﻿cmake_minimum_required(VERSION 3.10)
 project(rtz.gw C ASM)
 
-set(OPENSSL_ROOT_DIR /usr/local/ssl)
+set(OPENSSL_ROOT_DIR 3rdparty/openssl-1.1.0j)
+
 #find_package(OpenSSL 1.1 REQUIRED)
 set(OPENSSL_INCLUDE_DIRS ${OPENSSL_ROOT_DIR}/include)
 find_library(ssl_LIBRARY ssl PATHS ${OPENSSL_ROOT_DIR}/lib NO_DEFAULT_PATH)
 find_library(crypto_LIBRARY crypto PATHS ${OPENSSL_ROOT_DIR}/lib NO_DEFAULT_PATH)
 set(OPENSSL_LIBRARIES ${ssl_LIBRARY} ${crypto_LIBRARY})
+find_library(zk_LIBRARY zookeeper_mt PATHS 3rdparty/zookeeper-3.5.4/lib NO_DEFAULT_PATH)
+find_library(srtp2_LIBRARY srtp2 PATHS 3rdparty/libsrtp-2.2.0/lib NO_DEFAULT_PATH)
 
 add_subdirectory(3rdparty/cJSON-1.7.10)
 #add_subdirectory(3rdparty/libaco-1.2.4)
@@ -63,9 +66,9 @@ set(rtz_SRCS
     src/apierror.c
 #    src/rtmp_client.c
 	)
-add_executable(rtz.gw ${rtz_SRCS})
 include_directories(
-    /usr/include/apr-1.0
+    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/zookeeper-3.5.4/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/libsrtp-2.2.0/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 #    ${aco_INCLUDE_DIRS}
     ${cJSON_INCLUDE_DIRS}
@@ -74,7 +77,11 @@ include_directories(
     ${mxml_INCLUDE_DIRS}
     ${OPENSSL_INCLUDE_DIRS}
     )
-add_definitions(-pthread -D_GNU_SOURCE ${osip2_DEFINITIONS})
+add_definitions(-pthread -D_GNU_SOURCE -DTHREADED=1)
+if (RTZ_SERVER_SSL)
+    add_definitions(-DRTZ_SERVER_SSL=1)
+endif ()
+add_executable(rtz.gw ${rtz_SRCS})
 if (WITH_ASAN)
     add_definitions(-fsanitize=address)
     target_link_libraries(rtz.gw asan)
@@ -82,12 +89,8 @@ endif ()
 if (WITH_TCMALLOC)
     target_link_libraries(rtz.gw tcmalloc_and_profiler)
 endif ()
-if (RTZ_SERVER_SSL)
-    add_definitions(-DRTZ_SERVER_SSL=1)
-endif ()
-find_library(srtp2_LIBRARY srtp2 PATHS /usr/local/lib NO_DEFAULT_PATH)
 target_link_libraries(rtz.gw
-    zookeeper_mt
+    ${zk_LIBRARY}
 	${cJSON_LIBRARIES}
 #	${aco_LIBRARIES}
     ${exosip_LIBRARIES}

@@ -25,3 +25,5 @@ void rtz_stream_push_audio(rtz_stream_t *stream, uint32_t rtp_timestamp,
 void rtz_stream_update_videotime(rtz_stream_t *stream, double videotime);
 void rtz_webrtcup(void *rtz_handle);
 void rtz_hangup(void *rtz_handle);
+
+int rtz_get_server_load(rtz_server_t *srv);

@@ -1,4 +1,4 @@
-﻿#include "log.h"
+#include "log.h"
 #include "event_loop.h"
 #include "mpsc_queue.h"
 //#include "rtsp_client.h"
@@ -44,6 +44,8 @@ int RTMP_LOCAL_PORT = 1935;
 const char *CERT_PEM = NULL;
 const char *CERT_KEY = NULL;
 static const char *CERT_PWD = NULL;
+
+rtz_server_t *g_rtz_srv = NULL;
 
 void signal_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata)
 {
@@ -117,20 +119,20 @@ int main(int argc, char *argv[])
     sfd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
     zl_fd_ctl(main_loop, EPOLL_CTL_ADD, sfd, EPOLLIN, signal_event_handler, main_loop);
 
-    rtz_server_t *rtz_srv = rtz_server_new(main_loop);
-    rtz_server_bind(rtz_srv, RTZ_LOCAL_SIGNAL_PORT);
-    rtz_server_start(rtz_srv);
+    g_rtz_srv = rtz_server_new(main_loop);
+    rtz_server_bind(g_rtz_srv, RTZ_LOCAL_SIGNAL_PORT);
+    rtz_server_start(g_rtz_srv);
 
-    rtmp_server_t *rtmp_srv = rtmp_server_new(main_loop, rtz_srv);
+    rtmp_server_t *rtmp_srv = rtmp_server_new(main_loop, g_rtz_srv);
     rtmp_server_bind(rtmp_srv, RTMP_LOCAL_PORT);
     rtmp_server_start(rtmp_srv);
 
-    monitor_server_t *mon_srv = monitor_server_new(main_loop, rtz_srv, rtmp_srv);
+    monitor_server_t *mon_srv = monitor_server_new(main_loop, g_rtz_srv, rtmp_srv);
     monitor_server_bind(mon_srv, RTMP_LOCAL_PORT + 50);
     monitor_server_start(mon_srv);
 
     if (strlen(ZK_HOST))
-        start_zk_thread();
+        start_zk_registry(main_loop);
 
     //start_zk_thread();
 
@@ -144,9 +146,9 @@ int main(int argc, char *argv[])
 	}
 
     if (strlen(ZK_HOST))
-        stop_zk_thread();
+        stop_zk_registry();
 
-    rtz_server_stop(rtz_srv);
+    rtz_server_stop(g_rtz_srv);
 
     int i, n;
     for (i = 0; i < 5; ++i) {
@@ -157,7 +159,7 @@ int main(int argc, char *argv[])
 
     monitor_server_del(mon_srv);
 	rtmp_server_del(rtmp_srv);
-    rtz_server_del(rtz_srv);
+    rtz_server_del(g_rtz_srv);
 
     zl_fd_ctl(main_loop, EPOLL_CTL_DEL, sfd, 0, NULL, NULL);
     close(sfd);
