@@ -105,9 +105,6 @@ struct rtmp_peer_t {
     uint16_t sframe_time;       /* smoothed 1000/fps */
     int64_t last_video_ts;
 
-    sbuf_t *sps;
-    sbuf_t *pps;
-
     rtmp_handshake_state_t hstate;
     rtmp_parse_state_t pstate;
     rtmp_chunk_t last_chunks[RTMP_MAX_CHUNK_STREAMS];
@@ -164,12 +161,12 @@ static void send_notify(rtmp_peer_t *peer, const char *event, const void *data, 
 static void rtmp_server_cron(zl_loop_t *loop, int fd, uint64_t expires, void* udata);
 
 static void rtmp_write_handler(const void *data, int size, void *udata);
-static void set_video_codec_h264(rtmp_server_t *srv, const char *stream_name,
-                                 uint32_t timestamp, const char *data, int size);
-static void push_video(rtmp_server_t *srv, const char *stream_name, uint32_t timestamp,
-                       int key_frame, const void *data, int size);
-static void push_audio(rtmp_server_t *srv, const char *stream_name, uint32_t timestamp,
-                       const void *data, int size);
+static void peer_set_video_codec_h264(rtmp_peer_t *peer, uint32_t timestamp,
+                                      const void *data, int size);
+static void peer_push_video(rtmp_peer_t *peer, uint32_t timestamp,
+                            int key_frame, const void *data, int size);
+static void peer_push_audio(rtmp_peer_t *peer, uint32_t timestamp,
+                            const void *data, int size);
 
 rtmp_server_t *rtmp_server_new(zl_loop_t* loop, rtz_server_t *mse_srv)
 {
@@ -312,8 +309,6 @@ rtmp_peer_t *rtmp_peer_new(rtmp_server_t *srv, tcp_chan_t *chan)
     peer->recv_body_size_limit = RTMP_DEFAULT_CHUNK_BODY_SIZE;
     peer->vcodec = video_codec_new();
     peer->acodec = audio_codec_new();
-    peer->sps = sbuf_new();
-    peer->pps = sbuf_new();
     peer->video_tsc = tsc_new(32, 4000, 40);
     peer->audio_tsc = tsc_new(32, 4000, 40);
     list_add(&peer->link, &srv->peer_list);
@@ -346,8 +341,6 @@ void rtmp_peer_del(rtmp_peer_t *peer)
     sbuf_del(peer->tc_url);
     sbuf_del(peer->stream);
     tcp_chan_close(peer->chan, 0);
-    sbuf_del(peer->sps);
-    sbuf_del(peer->pps);
     video_codec_del(peer->vcodec);
     audio_codec_del(peer->acodec);
     tsc_del(peer->video_tsc);
@@ -364,7 +357,6 @@ void rtmp_server_cron(zl_loop_t *loop, int fd, uint64_t expires, void* udata)
 
 void handshake_handler(rtmp_peer_t *peer)
 {
-    int n;
     char data[RTMP_HANDSHAKE_C0_SIZE + RTMP_HANDSHAKE_C1_SIZE];
     if (peer->hstate == RTMP_HS_WAIT_C1) {
         if (tcp_chan_get_read_buf_size(peer->chan) < RTMP_HANDSHAKE_C0_SIZE + RTMP_HANDSHAKE_C1_SIZE)
@@ -594,12 +586,12 @@ void chunk_handler(rtmp_peer_t *peer)
                                 video_nalu_handler(peer, timestamp, p + 4, nalu_size);
                             } else {
                                 if (nalu_type == 7) {
-                                    sbuf_strncpy(peer->sps, p + 4, nalu_size);
+                                    sbuf_strncpy(peer->vcodec->sps_data, p + 4, nalu_size);
                                 } else if (nalu_type == 8) {
-                                    sbuf_strncpy(peer->pps, p + 4, nalu_size);
-                                    if (!sbuf_empty(peer->sps) && !sbuf_empty(peer->pps)) {
-                                        sbuf_t *avc = make_h264_decoder_config_record(peer->sps->data, peer->sps->size,
-                                                                                      peer->pps->data, peer->pps->size);
+                                    sbuf_strncpy(peer->vcodec->pps_data, p + 4, nalu_size);
+                                    if (!sbuf_empty(peer->vcodec->sps_data) && !sbuf_empty(peer->vcodec->pps_data)) {
+                                        sbuf_t *avc = make_h264_decoder_config_record(peer->vcodec->sps_data->data, peer->vcodec->sps_data->size,
+                                                                                      peer->vcodec->pps_data->data, peer->vcodec->pps_data->size);
                                         video_avc_handler(peer, timestamp, avc->data, avc->size);
                                         sbuf_del(avc);
                                     }
@@ -689,7 +681,7 @@ void audio_handler(rtmp_peer_t *peer, int64_t timestamp, const char *data, int s
         uint32_t rtp_ts = (uint32_t)(timestamp * 8);
         //LLOG(LL_TRACE, "audio ts=%ld size=%d", timestamp, size - 1);
         rtz_stream_push_audio(peer->rtz_stream, rtp_ts, data + 1, size - 1);
-        push_audio(peer->srv, peer->stream->data, (uint32_t)timestamp, data + 1, size - 1);
+        rtmp_server_push_audio(peer->srv, peer->stream->data, (uint32_t)timestamp, data + 1, size - 1);
     }
 }
 
@@ -733,7 +725,7 @@ void video_nalu_handler(rtmp_peer_t *peer, int64_t timestamp, const char *data, 
     uint32_t rtp_ts = (uint32_t)(timestamp * 90);
     int key_frame = (nalu_type == H264_NALU_IFRAME);
     rtz_stream_push_video(peer->rtz_stream, rtp_ts, peer->sframe_time, key_frame, data, size);
-    push_video(peer->srv, peer->stream->data, (uint32_t)timestamp, key_frame, data, size);
+    rtmp_server_push_video(peer->srv, peer->stream->data, (uint32_t)timestamp, key_frame, data, size);
 }
 
 void video_avc_handler(rtmp_peer_t *peer, int64_t timestamp, const char *data, int size)
@@ -741,7 +733,7 @@ void video_avc_handler(rtmp_peer_t *peer, int64_t timestamp, const char *data, i
     //LLOG(LL_TRACE, "got avc.%02hhx%02hhx%02hhx audio type=%d", data[1], data[2], data[3], peer->acodec->type);
     if (peer->rtz_stream) {
         rtz_stream_set_video_codec_h264(peer->rtz_stream, data, size);
-        set_video_codec_h264(peer->srv, peer->stream->data, (uint32_t)timestamp, data, size);
+        rtmp_server_set_video_codec_h264(peer->srv, peer->stream->data, (uint32_t)timestamp, data, size);
 
         /*
         if (peer->acodec->type == AUDIO_CODEC_PCMA) {
@@ -1227,7 +1219,7 @@ void rtmp_write_handler(const void *data, int size, void *udata)
     tcp_chan_write(chan, data, size);
 }
 
-void rtmp_stream_set_video_codec_h264(rtmp_peer_t *peer, uint32_t timestamp,
+void peer_set_video_codec_h264(rtmp_peer_t *peer, uint32_t timestamp,
                                       const void *data, int size)
 {
     rtmp_response_t *response = rtmp_response_new(peer, "AVC.SequenceHeader", RTMP_VIDEO_CHANNEL);
@@ -1260,18 +1252,18 @@ void send_notify(rtmp_peer_t *peer, const char *event, const void *data, int siz
     add_response(peer, 0, RTMP_MESSAGE_AMF0_NOTIFY, 1, response);
 }
 
-void set_video_codec_h264(rtmp_server_t *srv, const char *stream_name,
-                          uint32_t timestamp, const char *data, int size)
+void rtmp_server_set_video_codec_h264(rtmp_server_t *srv, const char *stream_name,
+                                      uint32_t timestamp, const void *data, int size)
 {
     rtmp_peer_t *p, *tmp;
     list_for_each_entry_safe(p, tmp, &srv->peer_list, link) {
         if ((p->flag & RTMP_PEER_PLAY) && !strcmp(p->stream->data, stream_name)) {
-            rtmp_stream_set_video_codec_h264(p, timestamp, data, size);
+            peer_set_video_codec_h264(p, timestamp, data, size);
         }
     }
 }
 
-void rtmp_stream_push_video(rtmp_peer_t *peer, uint32_t timestamp,
+void peer_push_video(rtmp_peer_t *peer, uint32_t timestamp,
                             int key_frame, const void *data, int size)
 {
     if (key_frame)
@@ -1295,7 +1287,7 @@ void rtmp_stream_push_video(rtmp_peer_t *peer, uint32_t timestamp,
     add_response(peer, timestamp, RTMP_MESSAGE_VIDEO, 1, response);
 }
 
-void rtmp_stream_push_audio(rtmp_peer_t *peer, uint32_t timestamp,
+void peer_push_audio(rtmp_peer_t *peer, uint32_t timestamp,
                             const void *data, int size)
 {
     if (!(peer->flag & RTMP_PEER_IFRAME_READY))
@@ -1316,7 +1308,7 @@ void rtmp_stream_push_audio(rtmp_peer_t *peer, uint32_t timestamp,
     add_response(peer, timestamp, RTMP_MESSAGE_AUDIO, 1, response);
 }
 
-void rtmp_get_player(rtmp_server_t *srv, const char *stream_name, int *player_count)
+void rtmp_get_stats(rtmp_server_t *srv, const char *stream_name, int *player_count)
 {
     rtmp_peer_t *p;
     *player_count = 0;
@@ -1326,23 +1318,23 @@ void rtmp_get_player(rtmp_server_t *srv, const char *stream_name, int *player_co
     }
 }
 
-void push_video(rtmp_server_t *srv, const char *stream_name,
-                uint32_t timestamp, int key_frame, const void *data, int size)
+void rtmp_server_push_video(rtmp_server_t *srv, const char *stream_name,
+                            uint32_t timestamp, int key_frame, const void *data, int size)
 {
     rtmp_peer_t *p, *tmp;
     list_for_each_entry_safe(p, tmp, &srv->peer_list, link) {
         if ((p->flag & RTMP_PEER_PLAY) && !strcmp(p->stream->data, stream_name)) {
-            rtmp_stream_push_video(p, timestamp, key_frame, data, size);
+            peer_push_video(p, timestamp, key_frame, data, size);
         }
     }
 }
-void push_audio(rtmp_server_t *srv, const char *stream_name,
-                uint32_t timestamp, const void *data, int size)
+void rtmp_server_push_audio(rtmp_server_t *srv, const char *stream_name,
+                            uint32_t timestamp, const void *data, int size)
 {
     rtmp_peer_t *p, *tmp;
     list_for_each_entry_safe(p, tmp, &srv->peer_list, link) {
         if ((p->flag & RTMP_PEER_PLAY) && !strcmp(p->stream->data, stream_name)) {
-            rtmp_stream_push_audio(p, timestamp, data, size);
+            peer_push_audio(p, timestamp, data, size);
         }
     }
 }

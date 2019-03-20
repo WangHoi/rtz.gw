@@ -1,4 +1,4 @@
-﻿#include "log.h"
+#include "log.h"
 #include "macro_util.h"
 #include "mpsc_queue.h"
 #include "sbuf.h"
@@ -52,13 +52,13 @@ static void *llog_thread(void* arg);
 static inline void llog_notify()
 {
     uint64_t i = 1;
-    write(llog_evt_fd, &i, sizeof(i));
+    UNUSED(write(llog_evt_fd, &i, sizeof(i)));
 }
 
 static inline void llog_wait()
 {
     uint64_t i;
-    read(llog_evt_fd, &i, 8);
+    UNUSED(read(llog_evt_fd, &i, 8));
 }
 
 void llog_set_level(enum LogLevel lvl)
@@ -152,9 +152,9 @@ void *llog_thread(void *arg)
             if (m->id == LOG_MSG_DATA) {
                 sbuf_t *b = (void*)m->u64[0];
                 if (llog_to_console)
-                    write(STDOUT_FILENO, b->data, b->size);
+                    UNUSED(write(STDOUT_FILENO, b->data, b->size));
                 if (llog_file_fd != -1)
-                    write(llog_file_fd, b->data, b->size);
+                    UNUSED(write(llog_file_fd, b->data, b->size));
                 sbuf_del(b);
             } else if (m->id == LOG_MSG_EXIT) {
                 pthread_exit(NULL);

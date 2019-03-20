@@ -9,7 +9,7 @@
 #endif
 
 #ifndef UNUSED
-#define UNUSED(x) ((void)(x))
+#define UNUSED(X) {typeof(X)  __attribute__((__unused__)) _unused = (X); }
 #endif
 
 #define WRITE_FENCE asm volatile ("" : : : "memory")
@@ -41,4 +41,3 @@
 #ifndef __always_inline
 #define __always_inline __attribute__((always_inline))
 #endif
-

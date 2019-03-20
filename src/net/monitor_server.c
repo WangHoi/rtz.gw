@@ -162,7 +162,7 @@ void request_handler(monitor_peer_t *peer, http_request_t *req)
     if (stream_name) {
         int nb_publish, nb_play, nb_play2;
         rtz_get_stream_info(peer->srv->rtz_srv, stream_name, &nb_publish, &nb_play);
-        rtmp_get_player(peer->srv->rtmp_srv, stream_name, &nb_play2);
+        rtmp_get_stats(peer->srv->rtmp_srv, stream_name, &nb_play2);
         LLOG(LL_TRACE, "handle: stream=%s publishers=%d players=%d(%d+%d)",
              stream_name, nb_publish, nb_play + nb_play2, nb_play, nb_play2);
         char json[256];

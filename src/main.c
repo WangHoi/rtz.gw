@@ -46,6 +46,7 @@ const char *CERT_KEY = NULL;
 static const char *CERT_PWD = NULL;
 
 rtz_server_t *g_rtz_srv = NULL;
+rtmp_server_t *g_rtmp_srv = NULL;
 
 void signal_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata)
 {
@@ -123,11 +124,11 @@ int main(int argc, char *argv[])
     rtz_server_bind(g_rtz_srv, RTZ_LOCAL_SIGNAL_PORT);
     rtz_server_start(g_rtz_srv);
 
-    rtmp_server_t *rtmp_srv = rtmp_server_new(main_loop, g_rtz_srv);
-    rtmp_server_bind(rtmp_srv, RTMP_LOCAL_PORT);
-    rtmp_server_start(rtmp_srv);
+    g_rtmp_srv = rtmp_server_new(main_loop, g_rtz_srv);
+    rtmp_server_bind(g_rtmp_srv, RTMP_LOCAL_PORT);
+    rtmp_server_start(g_rtmp_srv);
 
-    monitor_server_t *mon_srv = monitor_server_new(main_loop, g_rtz_srv, rtmp_srv);
+    monitor_server_t *mon_srv = monitor_server_new(main_loop, g_rtz_srv, g_rtmp_srv);
     monitor_server_bind(mon_srv, RTMP_LOCAL_PORT + 50);
     monitor_server_start(mon_srv);
 
@@ -158,8 +159,10 @@ int main(int argc, char *argv[])
     };
 
     monitor_server_del(mon_srv);
-	rtmp_server_del(rtmp_srv);
+	rtmp_server_del(g_rtmp_srv);
+    g_rtmp_srv = NULL;
     rtz_server_del(g_rtz_srv);
+    g_rtz_srv = NULL;
 
     zl_fd_ctl(main_loop, EPOLL_CTL_DEL, sfd, 0, NULL, NULL);
     close(sfd);

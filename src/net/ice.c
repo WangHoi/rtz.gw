@@ -296,6 +296,10 @@ void ice_agent_del(ice_agent_t *handle)
     ice_stream_del(handle->stream);
     sbuf_del(handle->hangup_reason);
     list_del(&handle->link);
+    ice_queued_packet_t *pkt, *tmp;
+    list_for_each_entry_safe(pkt, tmp, &handle->pkt_list, link) {
+        ice_free_queued_packet(pkt);
+    }
     free(handle);
 }
 
@@ -943,6 +947,10 @@ void ice_send_dtls(ice_agent_t *agent, const void *data, int size)
 
 void ice_prepare_video_keyframe(ice_agent_t *agent)
 {
+    if (!agent || ice_flags_is_set(agent, ICE_HANDLE_WEBRTC_STOP)
+        || ice_flags_is_set(agent, ICE_HANDLE_WEBRTC_ALERT))
+        return;
+    int q = offsetof(ice_agent_t, pkt_list);
     ice_queued_packet_t *pkt, *tmp;
     int n = 0, bytes = 0;
     list_for_each_entry_safe(pkt, tmp, &agent->pkt_list, link) {
@@ -1005,6 +1013,7 @@ void ice_send_packet(ice_agent_t *agent, ice_queued_packet_t *pkt)
                 //handle->last_srtp_error = res;
                 /* If we're debugging, though, print every occurrence */
                 //JANUS_LOG(LL_DEBUG, "[%"SCNu64"] ... SRTCP protect error... %s (len=%d-->%d)...\n", handle->handle_id, janus_srtp_error_str(res), pkt->length, plen);
+                ice_free_queued_packet(pkt);
                 return;
             }
             if (agent->peer_tcp && tcp_chan_get_write_buf_size(agent->peer_tcp)) {

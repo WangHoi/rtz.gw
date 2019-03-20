@@ -1140,7 +1140,7 @@ void rtz_hangup(void *rtz_handle)
     }
 }
 
-int rtz_get_server_load(rtz_server_t *srv)
+int rtz_get_stats(rtz_server_t *srv)
 {
     if (!srv)
         return 0;

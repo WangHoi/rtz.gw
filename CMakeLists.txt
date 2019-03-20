@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.10)
 project(rtz.gw C ASM)
 
 set(OPENSSL_ROOT_DIR 3rdparty/openssl-1.1.0j)
@@ -38,6 +38,7 @@ set(rtz_SRCS
     src/net/rtmp_types.c
     src/net/rtmp_handshake.c
     src/net/rtmp_server.c
+    src/net/rtmp_client.c
     src/net/monitor_server.c
     src/net/http_types.c
     src/net/http_hooks.c
@@ -78,6 +79,7 @@ include_directories(
     ${OPENSSL_INCLUDE_DIRS}
     )
 add_definitions(-pthread -D_GNU_SOURCE -DTHREADED=1)
+set(CMAKE_C_LINK_FLAGS "${CMAKE_C_LINK_FLAGS} -no-pie")
 if (RTZ_SERVER_SSL)
     add_definitions(-DRTZ_SERVER_SSL=1)
 endif ()

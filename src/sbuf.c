@@ -1,4 +1,4 @@
-﻿#include "sbuf.h"
+#include "sbuf.h"
 #include "macro_util.h"
 #include <stdlib.h>
 #include <stdio.h>

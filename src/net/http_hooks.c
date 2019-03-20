@@ -1,8 +1,9 @@
-﻿#include "http_hooks.h"
+#include "http_hooks.h"
 #include "event_loop.h"
 #include "tcp_chan.h"
 #include "log.h"
 #include "sbuf.h"
+#include "macro_util.h"
 #include "net/http_types.h"
 #include <stdlib.h>
 #include <string.h>
@@ -111,11 +112,11 @@ static void http_fd_event_handler(tcp_chan_t *chan, int status, void *udata)
     if (status > 0) {
         /* Connected, send request */
         char *body = NULL;
-        asprintf(&body, "{ \"action\":\"%s\",\"client_id\" : 1242,"
+        UNUSED(asprintf(&body, "{ \"action\":\"%s\",\"client_id\" : 1242,"
                  "\"ip\" : \"%s\",\"vhost\" : \"__defaultVhost__\",\"app\" : \"%s\","
                  "\"tcUrl\" : \"%s\","
                  "\"pageUrl\" : \"\" };", ctx->action->data,
-                 RTZ_LOCAL_IP, ctx->app->data, ctx->tc_url->data);
+                 RTZ_LOCAL_IP, ctx->app->data, ctx->tc_url->data));
         if (body) {
             sbuf_t *request = sbuf_newf(
                 "POST /streamcloud-control-service/srs/appgw/auth\r\n"

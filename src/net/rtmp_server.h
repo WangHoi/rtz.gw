@@ -19,10 +19,10 @@ void rtmp_server_del(rtmp_server_t *srv);
 //void rtmp_peer_update_events(struct rtmp_peer *peer);
 //void rtmp_peer_close(struct rtmp_peer_t *peer);
 
-void rtmp_stream_set_video_codec_h264(rtmp_peer_t *peer, uint32_t timestamp,
-                                      const void *data, int size);
-void rtmp_stream_push_video(rtmp_peer_t *peer, uint32_t timestamp,
-                            int key_frame, const void *data, int size);
-void rtmp_stream_push_audio(rtmp_peer_t *peer, uint32_t timestamp,
-                            const void *data, int size);
-void rtmp_get_player(rtmp_server_t *srv, const char *stream_name, int *player_count);
+void rtmp_server_set_video_codec_h264(rtmp_server_t *srv, const char *stream_name,
+                                      uint32_t timestamp, const void *data, int size);
+void rtmp_server_push_video(rtmp_server_t *srv, const char *stream_name,
+                            uint32_t timestamp, int key_frame, const void *data, int size);
+void rtmp_server_push_audio(rtmp_server_t *srv, const char *stream_name,
+                            uint32_t timestamp, const void *data, int size);
+void rtmp_get_stats(rtmp_server_t *srv, const char *stream_name, int *player_count);

@@ -1,4 +1,4 @@
-﻿#include "zk_util.h"
+#include "zk_util.h"
 #include "sbuf.h"
 #include "event_loop.h"
 #include "log.h"
@@ -125,7 +125,7 @@ void zk_update(zhandle_t *handle, const char *real_path,
     char text[1024];
     unsigned short PORT = 6060;
     snprintf(text, sizeof(text), "{\"public_host\": \"%s:%d\",\"local_host\": \"%s:%d\", \"load\": %d}",
-             public_ip, public_port, local_ip, local_port, rtz_get_server_load(g_rtz_srv));
+             public_ip, public_port, local_ip, local_port, rtz_get_stats(g_rtz_srv));
     int ret = zoo_set(handle, real_path, text, strlen(text), -1);
     if (ret != ZOK) {
         LLOG(LL_ERROR, "zoo_set error %d", ret);
