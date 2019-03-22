@@ -570,7 +570,7 @@ void send_upgrade_reply(http_peer_t *peer, const char *client_key)
     http_status_t status = HTTP_STATUS_SWITCHING_PROTOCOLS;
     n = asprintf(&s,
                  "HTTP/1.1 %d %s\r\n"
-                 "Server: mse server\r\n"
+                 "Server: rtz server\r\n"
                  "Connection: upgrade\r\n"
                  "Upgrade: WebSocket\r\n"
                  "Access-Control-Allow-Origin: *\r\n"
