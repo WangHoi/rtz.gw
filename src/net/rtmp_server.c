@@ -102,7 +102,7 @@ struct rtmp_peer_t {
     audio_codec_t *acodec;
 
     double duration;
-    uint16_t sframe_time;       /* smoothed 1000/fps */
+    float sframe_time;       /* smoothed 1000/fps */
     int64_t last_video_ts;
 
     rtmp_handshake_state_t hstate;
@@ -144,7 +144,7 @@ static void connect_handler(rtmp_peer_t *peer, const char *data, int size,
 static void send_s012(rtmp_peer_t *peer, const char *c1);
 
 static rtmp_peer_t *rtmp_peer_new(rtmp_server_t *srv, tcp_chan_t *chan);
-static void rtmp_peer_del(rtmp_peer_t *peer);
+void rtmp_peer_del(rtmp_peer_t *peer);
 
 static rtmp_response_t *rtmp_response_new(rtmp_peer_t *peer, const char *method,
                                           unsigned channel);
@@ -158,7 +158,7 @@ static void send_stream_event(rtmp_peer_t *peer, rtmp_event_type_t event);
 static void send_create_stream_result(rtmp_peer_t *peer, unsigned tx_id);
 static void send_on_status(rtmp_peer_t *peer, unsigned tx_id, const char *status);
 static void send_notify(rtmp_peer_t *peer, const char *event, const void *data, int size);
-static void rtmp_server_cron(zl_loop_t *loop, int fd, uint64_t expires, void* udata);
+//static void rtmp_server_cron(zl_loop_t *loop, int fd, uint64_t expires, void* udata);
 
 static void rtmp_write_handler(const void *data, int size, void *udata);
 static void peer_set_video_codec_h264(rtmp_peer_t *peer, uint32_t timestamp,
@@ -349,12 +349,6 @@ void rtmp_peer_del(rtmp_peer_t *peer)
     free(peer);
 }
 
-void rtmp_server_cron(zl_loop_t *loop, int fd, uint64_t expires, void* udata)
-{
-	LLOG(LL_TRACE, "rtmp server cron expires=%lu", (long)expires);
-	rtmp_server_t *srv = udata;
-}
-
 void handshake_handler(rtmp_peer_t *peer)
 {
     char data[RTMP_HANDSHAKE_C0_SIZE + RTMP_HANDSHAKE_C1_SIZE];
@@ -528,7 +522,7 @@ void chunk_handler(rtmp_peer_t *peer)
             char *edata = data + 2;
             uint32_t esize = hdr->body_size - 2;
             event_handler(peer, etype, edata, esize);
-            LLOG(LL_TRACE, "UserControl event_type=%d event_size=%d", (int)etype, (int)esize);
+            //LLOG(LL_TRACE, "UserControl event_type=%d event_size=%d", (int)etype, (int)esize);
         } else {
             LLOG(LL_ERROR, "UserControl invalid body_size=%d", (int)hdr->body_size);
         }
@@ -560,7 +554,7 @@ void chunk_handler(rtmp_peer_t *peer)
         int64_t frame_time = timestamp - peer->last_video_ts;
         if (0 < frame_time && frame_time < 1000) {
             if (peer->sframe_time)
-                peer->sframe_time = (frame_time + 3 * peer->sframe_time) / 4;
+                peer->sframe_time = (frame_time + 3 * peer->sframe_time) / 4.0f;
             else
                 peer->sframe_time = frame_time;
         }
@@ -690,8 +684,8 @@ void video_nalu_handler(rtmp_peer_t *peer, int64_t timestamp, const char *data, 
     //LLOG(LL_TRACE, "got nalu timestamp=%u type=%02hhx size=%d",
     //     (unsigned)timestamp, data[0], size);
     long long now = zl_timestamp();
-    if (peer->last_time && now - peer->last_time > 2 * peer->sframe_time + peer->sframe_time / 2)
-        LLOG(LL_WARN, "%s interframe delay %lld(%hu)",
+    if (peer->last_time && now - peer->last_time > 4.0f * peer->sframe_time)
+        LLOG(LL_WARN, "%s interframe delay %lld(%.0f)",
              peer->stream->data, now - peer->last_time, peer->sframe_time);
     peer->last_time = now;
 
@@ -791,7 +785,7 @@ void metadata_handler(rtmp_peer_t *peer, const char *data, int size)
             p += amf0_read_number(p, pend - p, &num);
             peer->vcodec->frame_rate = lroundl(num);
             if (peer->vcodec->frame_rate > 0 && !peer->sframe_time)
-                peer->sframe_time = 1000 / peer->vcodec->frame_rate;
+                peer->sframe_time = 1000.0f / peer->vcodec->frame_rate;
             //LLOG(LL_TRACE, "framerate=%d", peer->vcodec->frame_rate);
         } else if (!strcmp(name->data, "videocodecid")) {
             if (p[0] == AMF0_TYPE_STRING) {
@@ -1001,6 +995,7 @@ void command_handler(rtmp_peer_t *peer, unsigned channel, const char *cmd,
             send_on_status(peer, peer->next_tx_id++, "NetStream.Publish.BadName");
         } else {
             peer->rtz_stream = rtz_stream_new(peer->srv->rtz_srv, peer->stream->data);
+            peer->rtz_stream->rtmp_peer = peer;
             LLOG(LL_TRACE, "publish tcUrl='%s' stream_name='%s'",
                  peer->tc_url->data, peer->stream->data);
             send_on_status(peer, peer->next_tx_id++, "NetStream.Publish.Start");

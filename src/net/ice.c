@@ -255,7 +255,8 @@ void ice_tcp_accept_handler(tcp_srv_t *tcp_srv, tcp_chan_t *chan, void *udata)
 {
     ice_server_t *srv = udata;
     tcp_chan_set_cb(chan, ice_tcp_data_handler, ice_tcp_sent_handler, ice_tcp_error_handler, srv);
-    set_socket_send_buf_size(tcp_chan_fd(chan), 0);
+    /* typical minimum buffer size: 4608 */
+    set_socket_send_buf_size(tcp_chan_fd(chan), 0/*16384*/);
     int ret = set_ip_tos(tcp_chan_fd(chan), DSCP_CLASS_EF); /* EF class */
     //int size;
     //get_socket_send_buf_size(tcp_chan_fd(chan), &size);
@@ -280,34 +281,36 @@ ice_agent_t *ice_agent_new(ice_server_t *srv, void *rtz_handle)
     agent->rtcp_timer = -1;
     list_add(&agent->link, &srv->agent_list);
     INIT_LIST_HEAD(&agent->pkt_list);
-    LLOG(LL_TRACE, "create agent luser=%s", agent->stream->luser->data);
+    LLOG(LL_TRACE, "create agent %p handle %p luser=%s", agent,
+         agent->rtz_handle, agent->stream->luser->data);
     return agent;
 }
 
-void ice_agent_del(ice_agent_t *handle)
+void ice_agent_del(ice_agent_t *agent)
 {
-    if (!handle)
+    if (!agent)
         return;
-    LLOG(LL_TRACE, "release agent %p luser='%s'", handle, handle->stream->luser->data);
-    if (handle->peer_tcp)
-        ice_tcp_error_cleanup(handle->peer_tcp, handle->srv);
-    ice_webrtc_hangup(handle, "Delete ICE Agent");
-    ice_flags_set(handle, ICE_HANDLE_WEBRTC_STOP);
-    ice_stream_del(handle->stream);
-    sbuf_del(handle->hangup_reason);
-    list_del(&handle->link);
+    LLOG(LL_TRACE, "release agent %p handle %p luser='%s'", agent,
+         agent->rtz_handle, agent->stream->luser->data);
+    if (agent->peer_tcp)
+        ice_tcp_error_cleanup(agent->peer_tcp, agent->srv);
+    ice_webrtc_hangup(agent, "Delete ICE Agent");
+    ice_flags_set(agent, ICE_HANDLE_WEBRTC_STOP);
+    ice_stream_del(agent->stream);
+    sbuf_del(agent->hangup_reason);
+    list_del(&agent->link);
     ice_queued_packet_t *pkt, *tmp;
-    list_for_each_entry_safe(pkt, tmp, &handle->pkt_list, link) {
+    list_for_each_entry_safe(pkt, tmp, &agent->pkt_list, link) {
         ice_free_queued_packet(pkt);
     }
-    free(handle);
+    free(agent);
 }
 
-ice_stream_t *ice_stream_new(ice_agent_t *handle)
+ice_stream_t *ice_stream_new(ice_agent_t *agent)
 {
     ice_stream_t *stream = malloc(sizeof(ice_stream_t));
     memset(stream, 0, sizeof(ice_stream_t));
-    stream->agent = handle;
+    stream->agent = agent;
     stream->audio_codec = sbuf_new();
     stream->video_codec = sbuf_new();
     stream->luser = sbuf_random_string(ICE_UFRAG_LENGTH);

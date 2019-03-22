@@ -865,15 +865,6 @@ void error_handler(rtsp_client_t *client, int err)
     }
 }
 
-void rtsp_client_cron(zl_loop_t *loop)
-{
-    long long now = zl_timestamp();
-    rtsp_client_t *client, *tmp;
-    list_for_each_entry_safe(client, tmp, &timeout_check_list, timeout_link) {
-        rtsp_client_timeout_check(client, now);
-    }
-}
-
 long long rtsp_client_get_timestamp(rtsp_client_t *client)
 {
     if (client->connect_cb)

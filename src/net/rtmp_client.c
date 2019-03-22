@@ -54,7 +54,6 @@ typedef enum rtmp_handshake_state_t {
 
 struct rtmp_client_t {
     zl_loop_t *loop;
-    rtmp_server_t *srv;
     tcp_chan_t *chan;
     sbuf_t *chunk_body[RTMP_MAX_CHUNK_STREAMS];
 
@@ -84,16 +83,13 @@ struct rtmp_client_t {
     audio_codec_t *acodec;
 
     double duration;
-    uint16_t sframe_time;       /* smoothed 1000/fps */
+    float sframe_time;
     int64_t last_video_ts;
 
     void *udata;
     long long connect_timestamp;
-    zl_defer_cb connect_cb;
-    rtmp_packet_cb video_cb;
-    rtmp_packet_cb audio_cb;
 
-    int vcodec_changed;
+    //int vcodec_changed;
 
     int flag;
     struct list_head link;
@@ -145,8 +141,8 @@ static void send_play(rtmp_client_t *client, zl_defer_cb ucb);
 static void send_video(rtmp_client_t *client, uint32_t timestamp, const void *data, int size);
 static int is_publish_status(int64_t status);
 static void finish_requests(rtmp_client_t *client, unsigned tx_id, int64_t status);
-static rtmp_status_t get_status(const char *data, size_t size);
-
+static rtmp_status_t convert_to_status(const char *data, size_t size);
+static const char *get_status_text(rtmp_status_t status);
 static void rtmp_client_data_handler(tcp_chan_t *chan, void *udata);
 static void rtmp_client_event_handler(tcp_chan_t *chan, int status, void *udata);
 static void rtmp_write_handler(const void *data, int size, void *udata);
@@ -166,22 +162,34 @@ rtmp_client_t *rtmp_client_new(zl_loop_t *loop)
     client->pstate = RTMP_PARSE_INIT;
     client->recv_body_size_limit = RTMP_DEFAULT_CHUNK_BODY_SIZE;
     client->next_tx_id = 1;
-    client->vcodec_changed = 1;
+    client->video_tsc = tsc_new(32, 4000, 40);
+    client->audio_tsc = tsc_new(32, 4000, 40);
+    client->vcodec = video_codec_new();
+    client->acodec = audio_codec_new();
+    //client->vcodec_changed = 1;
+
     INIT_LIST_HEAD(&client->request_list);
     return client;
 }
-
+/*
 void rtmp_client_set_userdata(rtmp_client_t *client, void *udata)
 {
     client->udata = udata;
 }
-
+*/
 void rtmp_client_del(rtmp_client_t *client)
 {
     if (client->chan) {
         tcp_chan_close(client->chan, 0);
         client->chan = NULL;
     }
+    
+    rtmp_request_t *req, *tmp;
+    list_for_each_entry_safe(req, tmp, &client->request_list, link) {
+        rtmp_request_del(req);
+    }
+    INIT_LIST_HEAD(&client->request_list);
+
     int i;
     for (i = 0; i < RTMP_MAX_CHUNK_STREAMS; ++i)
         if (client->chunk_body[i])
@@ -190,6 +198,8 @@ void rtmp_client_del(rtmp_client_t *client)
     sbuf_del(client->ip);
     sbuf_del(client->app);
     sbuf_del(client->stream);
+    tsc_del(client->video_tsc);
+    tsc_del(client->audio_tsc);
     video_codec_del(client->vcodec);
     audio_codec_del(client->acodec);
     free(client);
@@ -248,7 +258,7 @@ void rtmp_client_data_handler(tcp_chan_t *chan, void *udata)
 
 void rtmp_client_event_handler(tcp_chan_t *chan, int status, void *udata)
 {
-    LLOG(LL_TRACE, "rtmp_client %p error %d", udata, status);
+    LLOG(LL_TRACE, "rtmp_client %p event %d", udata, status);
     rtmp_client_t *client = udata;
     if (status > 0) {
         /* Connected */
@@ -322,6 +332,10 @@ void rtmp_client_publish(rtmp_client_t *client, zl_defer_cb func)
 
 void rtmp_client_abort(rtmp_client_t *client)
 {
+    if (client->chan) {
+        tcp_chan_close(client->chan, 0);
+        client->chan = NULL;
+    }
     /*
     error_handler(client, -ECANCELED);
     if (client->fd != -1) {
@@ -331,6 +345,12 @@ void rtmp_client_abort(rtmp_client_t *client)
     }
     */
 }
+
+void rtmp_client_set_rtz_stream(rtmp_client_t *client, void *rtz_stream)
+{
+    client->rtz_stream = rtz_stream;
+}
+
 /*
 void rtmp_client_set_video_packet_cb(rtmp_client_t *client, rtmp_packet_cb func)
 {
@@ -479,7 +499,7 @@ void send_c2(rtmp_client_t *client, const char *s1)
 {
     tcp_chan_write(client->chan, s1, RTMP_HANDSHAKE_C2_SIZE);
 }
-
+#if 0
 void error_handler(rtmp_client_t *client, int err)
 {
     if (client->connect_cb) {
@@ -498,7 +518,7 @@ void error_handler(rtmp_client_t *client, int err)
     }
     */
 }
-
+#endif
 void chunk_handler(rtmp_client_t *client)
 {
     rtmp_chunk_t *hdr = &client->cur_chunk;
@@ -528,7 +548,7 @@ void chunk_handler(rtmp_client_t *client)
             char *edata = data + 2;
             uint32_t esize = hdr->body_size - 2;
             event_handler(client, etype, edata, esize);
-            LLOG(LL_TRACE, "UserControl event_type=%d event_size=%d", (int)etype, (int)esize);
+            //LLOG(LL_TRACE, "UserControl event_type=%d event_size=%d", (int)etype, (int)esize);
         } else {
             LLOG(LL_ERROR, "UserControl invalid body_size=%d", (int)hdr->body_size);
         }
@@ -558,12 +578,15 @@ void chunk_handler(rtmp_client_t *client)
 
         /* Update frame_time */
         int64_t frame_time = timestamp - client->last_video_ts;
+        float old_sframe_time = client->sframe_time;
         if (0 < frame_time && frame_time < 1000) {
             if (client->sframe_time)
-                client->sframe_time = (frame_time + 3 * client->sframe_time) / 4;
+                client->sframe_time = (frame_time + 3 * client->sframe_time) / 4.0f;
             else
                 client->sframe_time = frame_time;
         }
+        //LLOG(LL_TRACE, "frame_time=%ld old_sframe_time=%.0f sframe_time=%.0f",
+        //     frame_time, old_sframe_time, client->sframe_time);
         client->last_video_ts = timestamp;
 
         if (size > 5) {
@@ -663,7 +686,7 @@ void event_handler(rtmp_client_t *peer, rtmp_event_type_t type,
 void notify_handler(rtmp_client_t *client, const char *cmd,
                     const char *data, int size)
 {
-    LLOG(LL_TRACE, "notify '%s'", cmd);
+    //LLOG(LL_TRACE, "notify '%s'", cmd);
     if (!strcmp(cmd, "|RtmpSampleAccess")) {
     } else if (!strcmp(cmd, "onMetaData")) {
     } else {
@@ -705,14 +728,14 @@ void command_handler(rtmp_client_t *client, unsigned channel, const char *cmd,
     int64_t status;
     if (!strcmp(cmd, "onStatus")) {
         p += amf0_skip(p, data + size - p);
-        status = get_status(p, data + size - p);
-        LLOG(LL_TRACE, "onStatus: %ld", status);
+        status = convert_to_status(p, data + size - p);
+        LLOG(LL_TRACE, "onStatus: %s", get_status_text(status));
 
         finish_requests(client, tx_id, status);
     } else if (!strcmp(cmd, "_result")) {
         p += amf0_skip(p, data + size - p); // skip object
-        status = get_status(p, data + size - p);
-        LLOG(LL_TRACE, "_result: %ld", status);
+        status = convert_to_status(p, data + size - p);
+        LLOG(LL_TRACE, "_result: %s(%d)", get_status_text(status), (int)status);
 
         finish_requests(client, tx_id, status);
     } else {
@@ -877,7 +900,7 @@ void send_publish(rtmp_client_t *client, zl_defer_cb ucb)
     req->buf->size = p - req->buf->data;
     add_request(client, req);
 }
-
+#if 0
 void send_video(rtmp_client_t *client, uint32_t timestamp, const void *data, int size)
 {
     const h264_nalu_header_t *hdr = data;
@@ -949,8 +972,9 @@ void send_video(rtmp_client_t *client, uint32_t timestamp, const void *data, int
     }
     sbuf_del(buf);
 }
-
-rtmp_status_t get_status(const char *data, size_t size)
+#endif
+/** Convert returned AMF0(3) object to integer text */
+rtmp_status_t convert_to_status(const char *data, size_t size)
 {
     if (size <= 0)
         return RTMP_INVALID_STATUS;
@@ -1018,6 +1042,62 @@ rtmp_status_t get_status(const char *data, size_t size)
     return status;
 }
 
+const char *get_status_text(rtmp_status_t status)
+{
+    switch (status) {
+    case RTMP_SKIP_RESPONSE:
+        return "Skipped";
+    case RTMP_INVALID_STATUS:
+        return "Invalid";
+    case RTMP_NETSTREAM_BUFFER_EMPTY:
+        return "NetStream.Buffer.Empty";
+    case RTMP_NETSTREAM_BUFFER_FULL:
+        return "NetStream.Buffer.Full";
+    case RTMP_NETSTREAM_BUFFER_FLUSH:
+        return "NetStream.Buffer.Flush";
+    case RTMP_NETSTREAM_PUBLISH_START:
+        return "NetStream.Publish.Start";
+    case RTMP_NETSTREAM_PUBLISH_BADNAME:
+        return "NetStream.Publish.BadName";
+    case RTMP_NETSTREAM_PUBLISH_IDLE:
+        return "NetStream.Publish.Idle";
+    case RTMP_NETSTREAM_UNPUBLISH_SUCCESS:
+        return "NetStream.Unpublish.Success";
+    case RTMP_NETSTREAM_PLAY_START:
+        return "NetStream.Play.Start";
+    case RTMP_NETSTREAM_PLAY_STOP:
+        return "NetStream.Play.Stop";
+    case RTMP_NETSTREAM_PLAY_FAILED:
+        return "NetStream.Play.Failed";
+    case RTMP_NETSTREAM_PLAY_STREAM_NOT_FOUND:
+        return "NetStream.Play.NotFound";
+    case RTMP_NETSTREAM_PLAY_RESET:
+        return "NetStream.Play.Reset";
+    case RTMP_NETSTREAM_PLAY_PUBLISH_NOTIFY:
+        return "NetStream.Play.PublishNotify";
+    case RTMP_NETSTREAM_PLAY_UNPUBLISH_NOTIFY:
+        return "NetStream.Play.UnpublishNotify";
+    case RTMP_NETSTREAM_PAUSE_NOTIFY:
+        return "NetStream.Pause.Notify";
+    case RTMP_NETSTREAM_UNPAUSE_NOTIFY:
+        return "NetStream.Unpause.Notify";
+    case RTMP_NETCONNECTION_CLOSED:
+        return "NetConnection.Closed";
+    case RTMP_NETCONNECTION_FAILED:
+        return "NetConnection.Failed";
+    case RTMP_NETCONNECTION_SUCCESS:
+        return "NetConnection.Success";
+    case RTMP_NETCONNECTION_REJECTED:
+        return "NetConnection.Rejected";
+    case RTMP_NETCONNECTION_APP_SHUTDOWN:
+        return "NetConnection.AppShutdown";
+    case RTMP_NETCONNECTION_INVALID_APP:
+        return "NetConnection.InvalidApp";
+    default:
+        return "Unknown";
+    }
+}
+
 void handshake_handler(rtmp_client_t *client)
 {
     char data[RTMP_HANDSHAKE_S0_SIZE + RTMP_HANDSHAKE_S1_SIZE];
@@ -1027,7 +1107,9 @@ void handshake_handler(rtmp_client_t *client)
         tcp_chan_read(client->chan, data, RTMP_HANDSHAKE_S0_SIZE + RTMP_HANDSHAKE_S1_SIZE);
         send_c2(client, &data[1]);
         client->hstate = RTMP_HS_WAIT_S2;
-    } else if (client->hstate == RTMP_HS_WAIT_S2) {
+        /* fall through to check S2, if recv from server S0+S1+S2  */
+    }
+    if (client->hstate == RTMP_HS_WAIT_S2) {
         if (tcp_chan_get_read_buf_size(client->chan) < RTMP_HANDSHAKE_S2_SIZE)
             return;
         tcp_chan_read(client->chan, data, RTMP_HANDSHAKE_S2_SIZE);
@@ -1079,9 +1161,10 @@ void video_nalu_handler(rtmp_client_t *peer, int64_t timestamp, const char *data
     //LLOG(LL_TRACE, "got NALU timestamp=%u type=%02hhx size=%d",
     //     (unsigned)timestamp, data[0], size);
     long long now = zl_timestamp();
-    if (peer->last_time && now - peer->last_time > 2 * peer->sframe_time + peer->sframe_time / 2)
-        LLOG(LL_WARN, "%s interframe delay %lld(%hu)",
+    if (peer->last_time && now - peer->last_time > 4.0f * peer->sframe_time) {
+        LLOG(LL_WARN, "%s interframe delay %lld(%.0f)",
              peer->stream->data, now - peer->last_time, peer->sframe_time);
+    }
     peer->last_time = now;
 
     unsigned nalu_type = (unsigned)data[0] & 0x1f;
@@ -1121,7 +1204,6 @@ void video_avc_handler(rtmp_client_t *peer, int64_t timestamp, const char *data,
     //LLOG(LL_TRACE, "got avc.%02hhx%02hhx%02hhx audio type=%d", data[1], data[2], data[3], peer->acodec->type);
     if (peer->rtz_stream) {
         rtz_stream_set_video_codec_h264(peer->rtz_stream, data, size);
-        rtmp_server_set_video_codec_h264(peer->srv, peer->stream->data, (uint32_t)timestamp, data, size);
 
         /*
         if (peer->acodec->type == AUDIO_CODEC_PCMA) {
@@ -1179,7 +1261,7 @@ void metadata_handler(rtmp_client_t *peer, const char *data, int size)
             p += amf0_read_number(p, pend - p, &num);
             peer->vcodec->frame_rate = lroundl(num);
             if (peer->vcodec->frame_rate > 0 && !peer->sframe_time)
-                peer->sframe_time = 1000 / peer->vcodec->frame_rate;
+                peer->sframe_time = 1000.0f / peer->vcodec->frame_rate;
             //LLOG(LL_TRACE, "framerate=%d", peer->vcodec->frame_rate);
         } else if (!strcmp(name->data, "videocodecid")) {
             if (p[0] == AMF0_TYPE_STRING) {

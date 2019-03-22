@@ -43,6 +43,7 @@ int RTMP_PUBLIC_PORT = 1935;
 int RTMP_LOCAL_PORT = 1935;
 const char *CERT_PEM = NULL;
 const char *CERT_KEY = NULL;
+const char *ORIGIN_HOST = NULL;
 static const char *CERT_PWD = NULL;
 
 rtz_server_t *g_rtz_srv = NULL;
@@ -94,6 +95,7 @@ int main(int argc, char *argv[])
     RTMP_PUBLIC_PORT = cfg_get_int(cfg, "RTMP_PUBLIC_PORT", RTMP_LOCAL_PORT);
     CERT_PEM = cfg_get_text(cfg, "CERT_PEM", "/root/mycert.pem");
     CERT_KEY = cfg_get_text(cfg, "CERT_KEY", "/root/mycert.key");
+    ORIGIN_HOST = cfg_get_text(cfg, "ORIGIN_HOST", NULL);
     LLOG(LL_INFO, "ZK_HOST=%s", ZK_HOST);
     LLOG(LL_INFO, "RTZ_LOCAL_IP:SIGNAL_PORT,MEDIA_PORT,RTMP_PORT=%s:%d,%d,%d",
          RTZ_LOCAL_IP, RTZ_LOCAL_SIGNAL_PORT, RTZ_LOCAL_MEDIA_PORT, RTMP_LOCAL_PORT);
@@ -101,6 +103,7 @@ int main(int argc, char *argv[])
          RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT, RTZ_PUBLIC_MEDIA_PORT, RTMP_PUBLIC_PORT);
     LLOG(LL_INFO, "CERT_PEM=%s", CERT_PEM);
     LLOG(LL_INFO, "CERT_KEY=%s", CERT_KEY);
+    LLOG(LL_INFO, "ORIGIN_HOST=%s", ORIGIN_HOST ?: "<NULL>");
 
     SSL_library_init();
     SSL_load_error_strings();

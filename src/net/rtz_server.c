@@ -18,6 +18,8 @@
 #include "dtls.h"
 #include "media/rtp_mux.h"
 #include "apierror.h"
+#include "rtmp_client.h"
+#include "rtmp_server.h"
 #include <time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -36,6 +38,7 @@
 
 extern const char *RTZ_LOCAL_IP;
 extern const char *RTZ_PUBLIC_IP;
+extern const char *ORIGIN_HOST;
 extern int RTZ_PUBLIC_MEDIA_PORT;
 extern int RTZ_LOCAL_MEDIA_PORT;
 
@@ -56,10 +59,14 @@ enum {
     RTZ_HANDLE_STARTING = 2,
     RTZ_HANDLE_RTC_UP = 4,
     RTZ_HANDLE_STARTED = 8,
+    /** Time before release rtz_stream_t */
+    RTZ_NOVIDEO_TIMEOUT_MSECS = 5000,
+    RTZ_CRON_TIMEOUT_MSECS = 1000,
 };
 
 typedef struct http_peer_t http_peer_t;
 
+/* Handle (Secure)WebSocket protocol */
 #if RTZ_SERVER_SSL
 #define TCP_SRV_T tcp_srv_ssl_t
 #define TCP_SRV_BIND tcp_srv_ssl_bind
@@ -96,6 +103,7 @@ struct rtz_server_t {
     zl_loop_t *loop;
     TCP_SRV_T *tcp_srv;
     ice_server_t *ice_srv;
+    int timer;
 
     struct list_head peer_list;     /* http_peer_t list */
     struct list_head session_list;  /* rtz_session_t list */
@@ -138,23 +146,10 @@ typedef struct rtz_handle_t {
     ice_agent_t *ice;
     int flag;
     int sdp_version;
-    uint16_t min_playout_delay;     /* frames: nodelay:0, balanced:8, smooth:16 */
+    uint16_t min_playout_delay;     /* playout delay in frames: nodelay:0, balanced:8, smooth:16 */
     struct list_head link;          /* link to rtz_session_t.handle_list */
     struct list_head stream_link;   /* link to rtz_stream_t.handle_list */
 } rtz_handle_t;
-
-struct rtz_stream_t {
-    rtz_server_t *srv;
-    sbuf_t *stream_name;
-    rtp_mux_t *rtp_mux;
-    uint16_t sframe_time;
-    long long last_time;
-    struct list_head link;
-    struct list_head handle_list;
-#ifdef ENABLE_RTP_TESTCHAN
-    udp_chan_t *test_chan;
-#endif
-};
 
 static void accept_handler(TCP_SRV_T *tcp_srv, TCP_CHAN_T *chan, void *udata);
 static void http_request_handler(http_peer_t *peer, http_request_t *req);
@@ -198,6 +193,7 @@ static void rtz_handle_del(rtz_handle_t *handle);
 static void rtz_session_del(rtz_session_t *session);
 static void parse_url(rtz_handle_t *h, const char *url);
 static cJSON *make_streaming_event(rtz_handle_t *handle, const char *ename, cJSON **presult);
+static void rtz_server_cron(zl_loop_t *loop, int timerid, void *udata);
 
 rtz_server_t *rtz_server_new(zl_loop_t *loop)
 {
@@ -215,6 +211,7 @@ rtz_server_t *rtz_server_new(zl_loop_t *loop)
     INIT_LIST_HEAD(&srv->peer_list);
     INIT_LIST_HEAD(&srv->session_list);
     INIT_LIST_HEAD(&srv->stream_list);
+    srv->timer = zl_timer_start(loop, RTZ_CRON_TIMEOUT_MSECS, RTZ_CRON_TIMEOUT_MSECS, rtz_server_cron, srv);
     return srv;
 }
 
@@ -231,9 +228,9 @@ int rtz_server_bind(rtz_server_t *srv, unsigned short port)
 void rtz_server_del(rtz_server_t *srv)
 {
     rtz_server_stop(srv);
-
     ice_server_del(srv->ice_srv);
     TCP_SRV_DEL(srv->tcp_srv);
+    zl_timer_stop(srv->loop, srv->timer);
     free(srv);
 }
 int rtz_server_start(rtz_server_t *srv)
@@ -666,6 +663,7 @@ void destroy_session(http_peer_t *peer, const char *transaction, const char *ses
     peer->flag |= HTTP_PEER_CLOSE_ASAP;
 }
 
+/** Parse url, fill handle's fields: app, tc_url, stream_name */
 void parse_url(rtz_handle_t *h, const char *url)
 {
     sbuf_strcpy(h->url, url);
@@ -731,9 +729,31 @@ void create_handle(http_peer_t *peer, const char *transaction, const char *sessi
 
     handle->stream = find_stream(peer->srv, handle->stream_name->data);
     if (handle->stream) {
-        LLOG(LL_INFO, "handle %p join stream %p (name='%s')",
+        LLOG(LL_INFO, "handle %p join stream %p(%s)",
              handle, handle->stream, handle->stream_name->data);
         list_add(&handle->stream_link, &handle->stream->handle_list);
+    } else if (ORIGIN_HOST) {
+        handle->stream = rtz_stream_new(peer->srv, handle->stream_name->data);
+        rtmp_client_t *client = rtmp_client_new(peer->srv->loop);
+
+        sbuf_t *origin_url = sbuf_new1(1024);
+        sbuf_append1(origin_url, "rtmp://");
+        sbuf_append1(origin_url, ORIGIN_HOST);
+        const char* p = strchr(handle->tc_url->data + 8, '/');
+        if (p)
+            sbuf_append1(origin_url, p);
+        sbuf_appendc(origin_url, '/');
+        sbuf_append(origin_url, handle->stream_name);
+
+        LLOG(LL_DEBUG, "handle %p pull new stream %p(%s) origin='%s'",
+             handle, handle->stream, handle->stream_name->data, origin_url->data);
+
+        rtmp_client_set_uri(client, origin_url->data);
+        //rtmp_client_set_uri(client, "rtmp://172.16.3.103:19358/live/livestream_0");
+        rtmp_client_tcp_connect(client, NULL);
+        rtmp_client_set_rtz_stream(client, handle->stream);
+        handle->stream->rtmp_client = client;
+        sbuf_del(origin_url);
     }
 
     sbuf_t *offer_sdp = create_sdp(handle, tcp);
@@ -1027,12 +1047,19 @@ rtz_stream_t *rtz_stream_new(rtz_server_t *srv, const char *stream_name)
 #if ENABLE_RTP_TESTCHAN
     stream->test_chan = udp_chan_new(srv->loop);
 #endif
+
+    stream->last_in_time = stream->last_out_time = zl_time();
+
     return stream;
 }
 
 void rtz_stream_del(rtz_stream_t *stream)
 {
-    LLOG(LL_INFO, "rtz_stream_del %p (name=%s)", stream, stream->stream_name->data);
+    LLOG(LL_INFO, "rtz_stream_del %p(%s)", stream, stream->stream_name->data);
+    if (stream->rtmp_client) {
+        rtmp_client_del(stream->rtmp_client);
+        stream->rtmp_client = NULL;
+    }
     rtz_handle_t *h, *tmp;
     list_for_each_entry_safe(h, tmp, &stream->handle_list, stream_link) {
         h->stream = NULL;
@@ -1064,6 +1091,8 @@ rtz_stream_t *rtz_stream_get(rtz_server_t *srv, const char *stream_name)
 
 void rtz_stream_set_video_codec_h264(rtz_stream_t *stream, const void *data, int size)
 {
+    if (!stream)
+        return;
     const uint8_t *p = data;
     uint8_t num_sps = p[5] & 0x1f;
     uint16_t sps_size = unpack_be16(p + 6);
@@ -1078,14 +1107,23 @@ void rtz_stream_set_video_codec_h264(rtz_stream_t *stream, const void *data, int
 void rtz_stream_push_video(rtz_stream_t *stream, uint32_t rtp_ts, uint16_t sframe_time,
                            int key_frame, const void *data, int size)
 {
-    stream->last_time = zl_time();
+    if (!stream)
+        return;
     stream->sframe_time = sframe_time;
-    rtp_mux_input(stream->rtp_mux, 1, rtp_ts, data, size);
+    stream->last_in_time = zl_time();
+    if (!list_empty(&stream->handle_list)) {
+        stream->last_out_time = stream->last_in_time;
+        rtp_mux_input(stream->rtp_mux, 1, rtp_ts, data, size);
+    }
 }
 
 void rtz_stream_push_audio(rtz_stream_t *stream, uint32_t rtp_ts, const void *data, int size)
 {
-    rtp_mux_input(stream->rtp_mux, 0, rtp_ts, data, size);
+    if (!stream)
+        return;
+    if (!list_empty(&stream->handle_list)) {
+        rtp_mux_input(stream->rtp_mux, 0, rtp_ts, data, size);
+    }
 }
 
 void rtz_stream_update_videotime(rtz_stream_t *stream, double videotime)
@@ -1291,4 +1329,33 @@ cJSON *make_streaming_event(rtz_handle_t *handle, const char *ename, cJSON **pre
             *presult = result;
     }
     return json;
+}
+
+void rtz_server_cron(zl_loop_t *loop, int timerid, void *udata)
+{
+    rtz_server_t *srv = udata;
+    int edge = (ORIGIN_HOST != NULL);
+    rtz_stream_t *stream, *tmp;
+    long long now = zl_time();
+    list_for_each_entry_safe(stream, tmp, &srv->stream_list, link) {
+        /* expire randomly in range ([0.5, 1.5) * timeout) */
+        long long expire_timeout = RTZ_NOVIDEO_TIMEOUT_MSECS / 2 + lrand48() % RTZ_NOVIDEO_TIMEOUT_MSECS;
+        if (edge) {
+            if (now > stream->last_out_time + expire_timeout) {
+                LLOG(LL_ERROR, "rtz_stream_t %p(%s) timeout", stream, stream->stream_name->data);
+                rtz_stream_del(stream);
+            }
+        } else {
+            if (now > stream->last_in_time + expire_timeout) {
+                LLOG(LL_ERROR, "rtz_stream_t %p(%s) timeout", stream, stream->stream_name->data);
+                if (stream->rtmp_peer) {
+                    /* Calling rtmp_peer_del() will del rtz_stream_t */
+                    rtmp_peer_del(stream->rtmp_peer);
+                    stream->rtmp_peer = NULL;
+                } else {
+                    rtz_stream_del(stream);
+                }
+            }
+        }
+    }
 }

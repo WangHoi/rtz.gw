@@ -26,3 +26,5 @@ void rtmp_server_push_video(rtmp_server_t *srv, const char *stream_name,
 void rtmp_server_push_audio(rtmp_server_t *srv, const char *stream_name,
                             uint32_t timestamp, const void *data, int size);
 void rtmp_get_stats(rtmp_server_t *srv, const char *stream_name, int *player_count);
+
+void rtmp_peer_del(rtmp_peer_t *peer);
