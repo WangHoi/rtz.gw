@@ -54,7 +54,7 @@ static zhandle_t *handle = NULL;
 static volatile int connected = 0;
 static int ztimer = -1;
 static sbuf_t *rtz_real_path = NULL;
-static const char *RTZ_ORIGIN_SERVICE_NAME = "/avideo/rtz/load/";
+static const char *RTZ_ORIGIN_SERVICE_NAME = "/avideo/mse/load/";
 static const char *RTZ_EDGE_SERVICE_NAME_PREFIX = "/avideo/srs/edge/";
 static const int RECV_TIMEOUT_MSECS = 30000;
 static const int UPDATE_TIMEOUT_MSECS = 10000;
@@ -200,5 +200,5 @@ void zk_timeout_handler(zl_loop_t *loop, int id, void *udata)
 
 void zk_log_handler(const char *message)
 {
-    llog_raw(message);
+    llog_raw(message, 1);
 }

@@ -65,6 +65,7 @@ set(rtz_SRCS
     src/algo/crc32.c
     src/timestamp.c
     src/apierror.c
+    src/crash_util.c
 #    src/rtmp_client.c
 	)
 include_directories(
@@ -100,6 +101,8 @@ target_link_libraries(rtz.gw
     ${mxml_LIBRARIES}
     ${OPENSSL_LIBRARIES}
     ${srtp2_LIBRARY}
+    unwind
+    unwind-generic
 	pthread
     m
     dl

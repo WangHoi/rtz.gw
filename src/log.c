@@ -25,6 +25,7 @@
 enum {
     LOG_MSG_DATA = 1,
     LOG_MSG_EXIT = 2,
+    LOG_MSG_FLUSH = 4,
 };
 
 enum {
@@ -102,16 +103,33 @@ void llog_fmt(const char* filename, int fileline, const char* funcname, enum Log
     llog_notify();
 }
 
-void llog_raw(const char *msg)
+void llog_raw(const char *msg, int append_lf)
 {
     struct mpsc_msg *m = mpsc_reserve(mq);
     if (!m)
         return;
     sbuf_t *b = sbuf_strdup(msg);
-    sbuf_appendc(b, '\n');
+    if (append_lf)
+        sbuf_appendc(b, '\n');
     m->u64[0] = (uint64_t)b;
     mpsc_commit(m, LOG_MSG_DATA);
     llog_notify();
+}
+
+void llog_flush()
+{
+    struct mpsc_msg *m = mpsc_reserve(mq);
+    while (!m) {
+        pthread_yield();
+        m = mpsc_reserve(mq);
+    }
+    volatile int flushed = 0;
+    m->u64[0] = (uintptr_t)&flushed;
+    mpsc_commit(m, LOG_MSG_FLUSH);
+    llog_notify();
+    while (!flushed) {
+        usleep(100 * 1000);
+    }
 }
 
 void llog_init(int console, const char *fname)
@@ -158,6 +176,9 @@ void *llog_thread(void *arg)
                 sbuf_del(b);
             } else if (m->id == LOG_MSG_EXIT) {
                 pthread_exit(NULL);
+            } else if (m->id == LOG_MSG_FLUSH) {
+                volatile int *p = (volatile int*)m->u64[0];
+                *p = 1;
             }
             mpsc_consume(mq, m);
             m = mpsc_peek(mq);

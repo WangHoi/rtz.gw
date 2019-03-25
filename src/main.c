@@ -17,6 +17,7 @@
 #include "net/rtmp_server.h"
 #include "net/http_hooks.h"
 #include "net/tcp_chan_ssl.h"
+#include "crash_util.h"
 #include <stdio.h>
 #include <errno.h>
 #include <signal.h>
@@ -78,7 +79,15 @@ int main(int argc, char *argv[])
     sigaddset(&mask, SIGPIPE);
     sigaddset(&mask, SIGINT);
     sigaddset(&mask, SIGTERM);
+    sigaddset(&mask, SIGTTIN);
+    sigaddset(&mask, SIGTTOU);
+    sigaddset(&mask, SIGTSTP);
+    sigaddset(&mask, SIGURG);
+    sigaddset(&mask, SIGIO);
+    sigaddset(&mask, SIGHUP);
     sigprocmask(SIG_BLOCK, &mask, NULL);
+
+    install_crash_handler();
 
     llog_init(1, "gw.log");
     cfg_t *cfg = cfg_new();
@@ -119,7 +128,9 @@ int main(int argc, char *argv[])
 
     //test_http_hooks(main_loop);
 
-    sigdelset(&mask, SIGPIPE);
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGTERM);
     sfd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
     zl_fd_ctl(main_loop, EPOLL_CTL_ADD, sfd, EPOLLIN, signal_event_handler, main_loop);
 
