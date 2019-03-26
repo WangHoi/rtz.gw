@@ -742,7 +742,7 @@ void create_handle(http_peer_t *peer, const char *transaction, const char *sessi
         const char* p = strchr(handle->tc_url->data + 8, '/');
         if (p)
             sbuf_append1(origin_url, p);
-        sbuf_appendc(origin_url, '/');
+        sbuf_append1(origin_url, "|edge=1/");
         sbuf_append(origin_url, handle->stream_name);
 
         LLOG(LL_DEBUG, "handle %p pull new stream %p(%s) origin='%s'",
