@@ -19,6 +19,11 @@ option(RTZ_SERVER_SSL "enable SSL rtz server" OFF)
 option(WITH_ASAN "enable address sanitizer" OFF)
 option(WITH_TCMALLOC "link with tcmalloc" OFF)
 
+find_package(PkgConfig)
+if(PkgConfig_FOUND)
+    pkg_check_modules(SYSTEMD libsystemd)
+endif()
+
 set(rtz_SRCS
 #    src/hook/aco_hook_syscall.c
     src/media/sdp.c
@@ -66,7 +71,7 @@ set(rtz_SRCS
     src/timestamp.c
     src/apierror.c
     src/crash_util.c
-#    src/rtmp_client.c
+    src/watchdog.c
 	)
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/zookeeper-3.5.4/include
@@ -81,17 +86,23 @@ include_directories(
     )
 add_definitions(-pthread -D_GNU_SOURCE -DTHREADED=1)
 set(CMAKE_C_LINK_FLAGS "${CMAKE_C_LINK_FLAGS} -no-pie")
-if (RTZ_SERVER_SSL)
+if(RTZ_SERVER_SSL)
     add_definitions(-DRTZ_SERVER_SSL=1)
-endif ()
+endif()
 add_executable(rtz.gw ${rtz_SRCS})
-if (WITH_ASAN)
+if(WITH_ASAN)
     add_definitions(-fsanitize=address)
     target_link_libraries(rtz.gw asan)
-endif ()
-if (WITH_TCMALLOC)
+endif()
+if(WITH_TCMALLOC)
     target_link_libraries(rtz.gw tcmalloc_and_profiler)
-endif ()
+endif()
+
+if(SYSTEMD_FOUND)
+    add_definitions(-DWITH_SYSTEMD=1)
+    target_link_libraries(rtz.gw ${SYSTEMD_LIBRARIES})
+endif()
+
 target_link_libraries(rtz.gw
     ${zk_LIBRARY}
 	${cJSON_LIBRARIES}

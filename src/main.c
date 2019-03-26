@@ -18,6 +18,7 @@
 #include "net/http_hooks.h"
 #include "net/tcp_chan_ssl.h"
 #include "crash_util.h"
+#include "watchdog.h"
 #include <stdio.h>
 #include <errno.h>
 #include <signal.h>
@@ -89,7 +90,11 @@ int main(int argc, char *argv[])
 
     install_crash_handler();
 
+#if WITH_SYSTEMD
     llog_init(1, "gw.log");
+#else
+    llog_init(1, NULL);
+#endif
     cfg_t *cfg = cfg_new();
     LLOG(LL_INFO, "starting...");
 
@@ -155,6 +160,8 @@ int main(int argc, char *argv[])
  //   http_server_bind(srv, 5050);
  //   http_server_start(srv);
 
+    start_watchdog(main_loop);
+
     while (!zl_loop_stopped(main_loop)) {
         zl_poll(main_loop, 100);
         //sleep(1);
@@ -171,6 +178,8 @@ int main(int argc, char *argv[])
         if (n == 0)
             break;
     };
+
+    stop_watchdog();
 
     monitor_server_del(mon_srv);
 	rtmp_server_del(g_rtmp_srv);
