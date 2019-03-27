@@ -15,5 +15,5 @@ void llog_fmt(const char *filename, int fileline, const char* funcname, enum Log
 	          const char *fmt, ...) __attribute__((format(printf, 5, 6)));
 void llog_raw(const char *msg, int append_lf);
 void llog_flush();
-void llog_init(int console, const char *fname);
+void llog_init();
 void llog_cleanup();

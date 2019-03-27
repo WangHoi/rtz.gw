@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 
+#if WITH_COLOR
 #define ANSI_COLOR_RED     "\x1b[31m"
 #define ANSI_COLOR_GREEN   "\x1b[32m"
 #define ANSI_COLOR_YELLOW  "\x1b[33m"
@@ -21,6 +22,15 @@
 #define ANSI_COLOR_MAGENTA "\x1b[35m"
 #define ANSI_COLOR_CYAN    "\x1b[36m"
 #define ANSI_COLOR_RESET   "\x1b[0m"
+#else
+#define ANSI_COLOR_RED     ""
+#define ANSI_COLOR_GREEN   ""
+#define ANSI_COLOR_YELLOW  ""
+#define ANSI_COLOR_BLUE    ""
+#define ANSI_COLOR_MAGENTA ""
+#define ANSI_COLOR_CYAN    ""
+#define ANSI_COLOR_RESET   ""
+#endif
 
 enum {
     LOG_MSG_DATA = 1,
@@ -45,8 +55,6 @@ _Static_assert(ARRAY_SIZE(LL_LEVEL_NAMES) == LL_TRACE + 1, "Invalid LL_LEVEL_NAM
 static enum LogLevel max_log_lvl = LL_TRACE;
 static pthread_t llog_pid = 0;
 static struct mpsc_queue *mq = NULL;
-static int llog_to_console = 1;
-static int llog_file_fd = -1;
 static int llog_evt_fd = -1;
 static void *llog_thread(void* arg);
 
@@ -132,13 +140,8 @@ void llog_flush()
     }
 }
 
-void llog_init(int console, const char *fname)
+void llog_init()
 {
-    llog_to_console = console;
-    if (fname)
-        llog_file_fd = open(fname, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0644);
-    else
-        llog_file_fd = -1;
     llog_evt_fd = eventfd(0, EFD_CLOEXEC);
     mq = mpsc_queue_new(16);
     int ret = pthread_create(&llog_pid, NULL, llog_thread, NULL);
@@ -156,8 +159,6 @@ void llog_cleanup()
     llog_notify();
     pthread_join(llog_pid, NULL);
     mpsc_queue_del(mq);
-    if (llog_file_fd != -1)
-        close(llog_file_fd);
     if (llog_evt_fd != -1)
         close(llog_evt_fd);
 }
@@ -169,10 +170,7 @@ void *llog_thread(void *arg)
         while (m) {
             if (m->id == LOG_MSG_DATA) {
                 sbuf_t *b = (void*)m->u64[0];
-                if (llog_to_console)
-                    UNUSED(write(STDOUT_FILENO, b->data, b->size));
-                if (llog_file_fd != -1)
-                    UNUSED(write(llog_file_fd, b->data, b->size));
+                UNUSED(write(STDOUT_FILENO, b->data, b->size));
                 sbuf_del(b);
             } else if (m->id == LOG_MSG_EXIT) {
                 pthread_exit(NULL);

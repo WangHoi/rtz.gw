@@ -8,8 +8,9 @@
 static int timer = -1;
 static zl_loop_t *loop = NULL;
 static void watchdog_timeout_handler(zl_loop_t *loop, int timer, void *udata);
-void start_watchdog(zl_loop_t *loop)
+void start_watchdog(zl_loop_t *l)
 {
+    loop = l;
     uint64_t usec;
     int ret = sd_watchdog_enabled(0, &usec);
     if (ret > 0) {

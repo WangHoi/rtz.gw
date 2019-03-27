@@ -90,11 +90,7 @@ int main(int argc, char *argv[])
 
     install_crash_handler();
 
-#if WITH_SYSTEMD
-    llog_init(1, "gw.log");
-#else
-    llog_init(1, NULL);
-#endif
+    llog_init();
     cfg_t *cfg = cfg_new();
     LLOG(LL_INFO, "starting...");
 
