@@ -1,0 +1,6 @@
+#! /bin/sh
+# postinst script for rtz.gw
+
+set -e
+systemctl daemon-reload
+systemctl restart syslog

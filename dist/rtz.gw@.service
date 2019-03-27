@@ -1,0 +1,23 @@
+[Unit]
+Description = avideo WebRTC media gateway, instance %i
+After = NetworkManager-wait-online.service network.target network-online.target dbus.service syslog.service
+Wants = NetworkManager-wait-online.service network-online.target syslog.service
+
+[Service]
+Type = simple
+User = root
+ExecStart = /app/avideo/rtz.gw
+WorkingDirectory = /app/avideo
+EnvironmentFile=-/app/avideo/rtz.%i.conf
+Restart = on-failure
+RestartSec = 30
+WatchdogSec = 30
+StartLimitInterval = 60
+StartLimitBurst = 10
+StandardOutput = syslog
+StandardError = syslog
+SyslogIdentifier = rtz.gw.%i
+
+[Install]
+WantedBy = multi-user.target
+

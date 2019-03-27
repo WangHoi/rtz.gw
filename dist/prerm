@@ -1,0 +1,5 @@
+#! /bin/sh
+# prerm script for rtz.gw
+
+set -e
+systemctl stop 'rtz.gw@*' --all

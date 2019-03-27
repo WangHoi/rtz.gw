@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 project(rtz.gw C ASM)
+set(rtzgw_VERSION "0.1.0")
 
 set(OPENSSL_ROOT_DIR 3rdparty/openssl-1.1.0j)
 
@@ -118,6 +119,25 @@ target_link_libraries(rtz.gw
     m
     dl
 	)
+install(TARGETS rtz.gw DESTINATION /app/avideo)
+install(FILES
+    dist/rtz.pem
+    dist/rtz.key
+    dist/rtz.internal-dev.conf
+    dist/rtz.internal-test.conf
+    dist/rtz.aliyun-demo.conf
+    dist/rtz.aliyun-tob.conf
+    DESTINATION /app/avideo)
+install(FILES dist/70-rtz.gw.conf DESTINATION /etc/rsyslog.d)
+install(FILES dist/rtz.gw@.service DESTINATION /etc/systemd/system)
+
+set(CPACK_GENERATOR "DEB")
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Wang Hoi")
+set(CPACK_PACKAGE_VERSION ${rtzgw_VERSION})
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libgoogle-perftools4 (>= 2.4-0)")
+set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA "${CMAKE_CURRENT_SOURCE_DIR}/dist/postinst;${CMAKE_CURRENT_SOURCE_DIR}/dist/prerm;${CMAKE_CURRENT_SOURCE_DIR}/dist/postrm;")
+include(CPack)
+
 #[[
 add_executable(test_srv src/test_srv.c
     src/net/tcp_chan.c

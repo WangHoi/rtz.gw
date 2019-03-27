@@ -103,8 +103,8 @@ int main(int argc, char *argv[])
     RTZ_PUBLIC_MEDIA_PORT = cfg_get_int(cfg, "RTZ_PUBLIC_MEDIA_PORT", RTZ_LOCAL_MEDIA_PORT);
     RTMP_LOCAL_PORT = cfg_get_int(cfg, "RTMP_LOCAL_PORT", 1935);
     RTMP_PUBLIC_PORT = cfg_get_int(cfg, "RTMP_PUBLIC_PORT", RTMP_LOCAL_PORT);
-    CERT_PEM = cfg_get_text(cfg, "CERT_PEM", "/root/mycert.pem");
-    CERT_KEY = cfg_get_text(cfg, "CERT_KEY", "/root/mycert.key");
+    CERT_PEM = cfg_get_text(cfg, "CERT_PEM", "rtz.pem");
+    CERT_KEY = cfg_get_text(cfg, "CERT_KEY", "rtz.key");
     ORIGIN_HOST = cfg_get_text(cfg, "ORIGIN_HOST", NULL);
     LLOG(LL_INFO, "ZK_HOST=%s", ZK_HOST);
     LLOG(LL_INFO, "RTZ_LOCAL_IP:SIGNAL_PORT,MEDIA_PORT,RTMP_PORT=%s:%d,%d,%d",
