@@ -1,4 +1,4 @@
-#include "rtmp_client.h"
+﻿#include "rtmp_client.h"
 #include "event_loop.h"
 #include "sbuf.h"
 #include "net_util.h"
@@ -686,9 +686,20 @@ void event_handler(rtmp_client_t *peer, rtmp_event_type_t type,
 void notify_handler(rtmp_client_t *client, const char *cmd,
                     const char *data, int size)
 {
+    const char *p = data;
+    const char *pend = data + size;
     //LLOG(LL_TRACE, "notify '%s'", cmd);
     if (!strcmp(cmd, "|RtmpSampleAccess")) {
     } else if (!strcmp(cmd, "onMetaData")) {
+        metadata_handler(client, data, size);
+    } else if (!strcmp(cmd, "@setDataFrame")) {
+        sbuf_t *name = sbuf_new();
+        if (*p == AMF0_TYPE_STRING) {
+            p += amf0_read_string(p, pend - p, name);
+            if (!strcmp(name->data, "onMetaData"))
+                metadata_handler(client, p, pend - p);
+        }
+        sbuf_del(name);
     } else {
 
     }
@@ -1161,7 +1172,7 @@ void video_nalu_handler(rtmp_client_t *peer, int64_t timestamp, const char *data
     //LLOG(LL_TRACE, "got NALU timestamp=%u type=%02hhx size=%d",
     //     (unsigned)timestamp, data[0], size);
     long long now = zl_timestamp();
-    if (peer->last_time && now - peer->last_time > 4.0f * peer->sframe_time) {
+    if (peer->last_time && now - peer->last_time > 8.0f * peer->sframe_time) {
         LLOG(LL_WARN, "%s interframe delay %lld(%.0f)",
              peer->stream->data, now - peer->last_time, peer->sframe_time);
     }

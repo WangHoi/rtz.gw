@@ -1,4 +1,4 @@
-#include "ice.h"
+﻿#include "ice.h"
 #include "sbuf.h"
 #include "event_loop.h"
 #include "udp_chan.h"
@@ -51,6 +51,7 @@ enum {
 
     MAX_PER_SEND_SIZE = 32 * 1024,
     DSCP_CLASS_EF = 0b101110,
+    DROP_THREHOLD = 128 * 1024,
 };
 
 #define ICE_PACKET_AUDIO_RTP    0
@@ -955,15 +956,25 @@ void ice_prepare_video_keyframe(ice_agent_t *agent)
         return;
     int q = offsetof(ice_agent_t, pkt_list);
     ice_queued_packet_t *pkt, *tmp;
-    int n = 0, bytes = 0;
-    list_for_each_entry_safe(pkt, tmp, &agent->pkt_list, link) {
-        ++n;
+    int n, bytes = 0, need_drop = 0;
+    list_for_each_entry(pkt, &agent->pkt_list, link) {
         bytes += pkt->length;
-        ice_free_queued_packet(pkt);
+        if (bytes > DROP_THREHOLD) {
+            need_drop = 1;
+            break;
+        }
     }
-    if (n > 0)
+    if (need_drop) {
+        n = 0;
+        bytes = 0;
+        list_for_each_entry_safe(pkt, tmp, &agent->pkt_list, link) {
+            ++n;
+            bytes += pkt->length;
+            ice_free_queued_packet(pkt);
+        }
         LLOG(LL_TRACE, "rtz_handle %p drop %d packets, bytes=%d",
              agent->rtz_handle, n, bytes);
+    }
 }
 
 void ice_send(ice_agent_t *agent, int type, const void *data, int size)

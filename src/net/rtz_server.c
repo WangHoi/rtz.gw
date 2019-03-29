@@ -1,4 +1,4 @@
-#include "rtz_server.h"
+﻿#include "rtz_server.h"
 #include "event_loop.h"
 #include "net_util.h"
 #include "log.h"
@@ -60,7 +60,7 @@ enum {
     RTZ_HANDLE_RTC_UP = 4,
     RTZ_HANDLE_STARTED = 8,
     /** Time before release rtz_stream_t */
-    RTZ_NOVIDEO_TIMEOUT_MSECS = 5000,
+    RTZ_NO_VIDEO_TIMEOUT_MSECS = 15000,
     RTZ_CRON_TIMEOUT_MSECS = 1000,
 };
 
@@ -1338,16 +1338,17 @@ void rtz_server_cron(zl_loop_t *loop, int timerid, void *udata)
     rtz_stream_t *stream, *tmp;
     long long now = zl_time();
     list_for_each_entry_safe(stream, tmp, &srv->stream_list, link) {
-        /* expire randomly in range ([0.5, 1.5) * timeout) */
-        long long expire_timeout = RTZ_NOVIDEO_TIMEOUT_MSECS / 2 + lrand48() % RTZ_NOVIDEO_TIMEOUT_MSECS;
+        long long expire_timeout = RTZ_NO_VIDEO_TIMEOUT_MSECS + lrand48() % 1000;
         if (edge) {
             if (now > stream->last_out_time + expire_timeout) {
-                LLOG(LL_ERROR, "rtz_stream_t %p(%s) timeout", stream, stream->stream_name->data);
+                LLOG(LL_ERROR, "rtz_stream_t %p(%s) edge_timeout %lld ms", stream,
+                     stream->stream_name->data, now - stream->last_out_time);
                 rtz_stream_del(stream);
             }
         } else {
             if (now > stream->last_in_time + expire_timeout) {
-                LLOG(LL_ERROR, "rtz_stream_t %p(%s) timeout", stream, stream->stream_name->data);
+                LLOG(LL_ERROR, "rtz_stream_t %p(%s) origin_timeout %lld ms", stream,
+                     stream->stream_name->data, now - stream->last_in_time);
                 if (stream->rtmp_peer) {
                     /* Calling rtmp_peer_del() will del rtz_stream_t */
                     rtmp_peer_del(stream->rtmp_peer);

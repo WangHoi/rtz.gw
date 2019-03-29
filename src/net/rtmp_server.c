@@ -1,4 +1,4 @@
-#include "rtmp_server.h"
+﻿#include "rtmp_server.h"
 #include "event_loop.h"
 #include "net_util.h"
 #include "log.h"
@@ -684,7 +684,7 @@ void video_nalu_handler(rtmp_peer_t *peer, int64_t timestamp, const char *data, 
     //LLOG(LL_TRACE, "got nalu timestamp=%u type=%02hhx size=%d",
     //     (unsigned)timestamp, data[0], size);
     long long now = zl_timestamp();
-    if (peer->last_time && now - peer->last_time > 4.0f * peer->sframe_time)
+    if (peer->last_time && now - peer->last_time > 8.0f * peer->sframe_time)
         LLOG(LL_WARN, "%s interframe delay %lld(%.0f)",
              peer->stream->data, now - peer->last_time, peer->sframe_time);
     peer->last_time = now;
@@ -934,6 +934,7 @@ void notify_handler(rtmp_peer_t *peer, const char *cmd, const char *data, int si
 
     if (!strcmp(cmd, "|RtmpSampleAccess")) {
     } else if (!strcmp(cmd, "onMetaData")) {
+        metadata_handler(peer, p, pend - p);
     } else if (!strcmp(cmd, "@setDataFrame")) {
         sbuf_t *name = sbuf_new();
         if (*p == AMF0_TYPE_STRING) {
