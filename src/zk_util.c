@@ -1,4 +1,5 @@
 #include "zk_util.h"
+#if WITH_ZOOKEEPER
 #include "sbuf.h"
 #include "event_loop.h"
 #include "log.h"
@@ -202,3 +203,13 @@ void zk_log_handler(const char *message)
 {
     llog_raw(message, 1);
 }
+#else
+void start_zk_registry(zl_loop_t *loop)
+{
+
+}
+void stop_zk_registry()
+{
+
+}
+#endif

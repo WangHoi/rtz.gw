@@ -1,6 +1,7 @@
 #include "crash_util.h"
 #include "log.h"
 #include <signal.h>
+#define UNW_LOCAL_ONLY
 #include <unwind.h>
 #include <libunwind.h>
 #include <stddef.h>
