@@ -1,4 +1,4 @@
-﻿#include "rtz_server.h"
+#include "rtz_server.h"
 #include "event_loop.h"
 #include "net_util.h"
 #include "log.h"
@@ -817,7 +817,6 @@ void handle_message(http_peer_t *peer, const char *transaction,
                     cJSON *body, cJSON *jsep)
 {
     const char *request = cJSON_GetStringValue(cJSON_GetObjectItem(body, "request"));
-    const char *stream_name = cJSON_GetStringValue(cJSON_GetObjectItem(body, "stream"));
     if (!strcmp(request, "start")) {
         const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(jsep, "type"));
         const char *sdp = cJSON_GetStringValue(cJSON_GetObjectItem(jsep, "sdp"));
@@ -830,7 +829,7 @@ void handle_message(http_peer_t *peer, const char *transaction,
     }
 }
 
-sbuf_t * create_sdp(rtz_handle_t *handle, int tcp)
+sbuf_t *create_sdp(rtz_handle_t *handle, int tcp)
 {
     ice_agent_t *agent = handle->ice;
     const char *user = ice_get_luser(agent);
@@ -866,7 +865,7 @@ sbuf_t * create_sdp(rtz_handle_t *handle, int tcp)
         "a=rtpmap:8 PCMA/8000\r\n"
         //"a=maxptime:40\r\n"
         "a=fmtp:8 \r\n"
-        "a=ssrc:%"SCNu32" cname:rtzaudio\r\n"
+        "a=ssrc:%"SCNu32" cname:rtz\r\n"
         "a=ssrc:%"SCNu32" msid:rtz rtza0\r\n"
         "a=ssrc:%"SCNu32" mslabel:rtz\r\n"
         "a=ssrc:%"SCNu32" label:rtza0\r\n",
@@ -905,7 +904,7 @@ sbuf_t * create_sdp(rtz_handle_t *handle, int tcp)
         "a=rtcp-fb:96 nack\r\n"
         "a=rtcp-fb:96 nack pli\r\n"
         "a=rtcp-fb:96 goog-remb\r\n"
-        "a=ssrc:%"SCNu32" cname:rtzvideo\r\n"
+        "a=ssrc:%"SCNu32" cname:rtz\r\n"
         "a=ssrc:%"SCNu32" msid:rtz rtzv0\r\n"
         "a=ssrc:%"SCNu32" mslabel:rtz\r\n"
         "a=ssrc:%"SCNu32" label:rtzv0\r\n",

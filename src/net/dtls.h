@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <openssl/ssl.h>
 #include <srtp2/srtp.h>
 
@@ -108,3 +108,5 @@ const char *get_dtls_srtp_role(dtls_role role);
  * @param profile The SRTP profile as exported by a DTLS-SRTP handshake
  * @return A string representation of the profile */
 const char *get_dtls_srtp_profile(int profile);
+
+SSL_CTX *dtls_srtp_get_ssl_ctx();

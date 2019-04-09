@@ -300,7 +300,7 @@ int rtcp_parse(rtcp_context *ctx, char *packet, int len);
  * @param[in] video Whether the RTCP packet contains report for video data
  * @returns The number of fields updated, negative values on errors */
 int rtcp_fix_report_data(char *packet, int len, uint32_t base_ts, uint32_t base_ts_prev,
-                               uint32_t ssrc_peer, uint32_t ssrc_local, uint32_t ssrc_expected, int video);
+                         uint32_t ssrc_peer, uint32_t ssrc_local, uint32_t ssrc_expected, int video);
 
 /** Method to fix an RTCP message (http://tools.ietf.org/html/draft-ietf-straw-b2bua-rtcp-00)
  * @param[in] ctx RTCP context to update, if needed (optional)

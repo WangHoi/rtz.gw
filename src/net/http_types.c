@@ -396,6 +396,11 @@ int http_parse_response_line(const char *p, const char *const pend,
     int ret;
     int status = INVALID_HTTP_STATUS;
     ret = sscanf(p, "HTTP/1.%*d %d %*s", &status);
+    if (ret != 1) {
+        ret = -1;
+        goto err_out;
+    }
+    ret = 0;
     r->status = (http_status_t)status;
     http_consume_line_end(p, pend, &p);
 err_out:

@@ -253,7 +253,7 @@ int rtcp_fix_ssrc(rtcp_context *ctx, char *packet, int len,
             /* SDES, source description */
             //LLOG(LL_TRACE, "     #%d SDES (202)", pno);
             rtcp_sdes *sdes = (rtcp_sdes *)rtcp;
-            //~ LLOG(LL_TRACE, "       -- SSRC: %u\n", ntohl(sdes->chunk.ssrc));
+            //~ LLOG(LL_TRACE, "       -- SSRC: %u", ntohl(sdes->chunk.ssrc));
             if (fixssrc && newssrcl) {
                 sdes->chunk.ssrc = htonl(newssrcl);
             }
@@ -263,7 +263,7 @@ int rtcp_fix_ssrc(rtcp_context *ctx, char *packet, int len,
             /* BYE, goodbye */
             //LLOG(LL_TRACE, "     #%d BYE (203)", pno);
             rtcp_bye *bye = (rtcp_bye *)rtcp;
-            //~ LLOG(LL_TRACE, "       -- SSRC: %u\n", ntohl(bye->ssrc[0]));
+            //LLOG(LL_TRACE, "       -- SSRC: %u", ntohl(bye->ssrc[0]));
             if (fixssrc && newssrcl) {
                 bye->ssrc[0] = htonl(newssrcl);
             }
@@ -271,9 +271,9 @@ int rtcp_fix_ssrc(rtcp_context *ctx, char *packet, int len,
         }
         case RTCP_APP: {
             /* APP, application-defined */
-            LLOG(LL_TRACE, "     #%d APP (204)", pno);
+            //LLOG(LL_TRACE, "     #%d APP (204)", pno);
             rtcp_app *app = (rtcp_app *)rtcp;
-            //~ LLOG(LL_TRACE, "       -- SSRC: %u\n", ntohl(app->ssrc));
+            //~ LLOG(LL_TRACE, "       -- SSRC: %u", ntohl(app->ssrc));
             if (fixssrc && newssrcl) {
                 app->ssrc = htonl(newssrcl);
             }
@@ -281,7 +281,7 @@ int rtcp_fix_ssrc(rtcp_context *ctx, char *packet, int len,
         }
         case RTCP_FIR: {
             /* FIR, rfc2032 */
-            LLOG(LL_TRACE, "     #%d FIR (192)", pno);
+            //LLOG(LL_TRACE, "     #%d FIR (192)", pno);
             rtcp_fb *rtcpfb = (rtcp_fb *)rtcp;
             if (fixssrc && newssrcr && (ntohs(rtcp->length) >= 20)) {
                 rtcpfb->media = htonl(newssrcr);
@@ -294,19 +294,19 @@ int rtcp_fix_ssrc(rtcp_context *ctx, char *packet, int len,
         }
         case RTCP_RTPFB: {
             /* RTPFB, Transport layer FB message (rfc4585) */
-            //~ LLOG(LL_TRACE, "     #%d RTPFB (205)\n", pno);
+            //LLOG(LL_TRACE, "     #%d RTPFB (205)", pno);
             int fmt = rtcp->rc;
-            //~ LLOG(LL_TRACE, "       -- FMT: %u\n", fmt);
+            //LLOG(LL_TRACE, "       -- FMT: %u", fmt);
             rtcp_fb *rtcpfb = (rtcp_fb *)rtcp;
-            //~ LLOG(LL_TRACE, "       -- SSRC: %u\n", ntohl(rtcpfb->ssrc));
+            //LLOG(LL_TRACE, "       -- SSRC: %u", ntohl(rtcpfb->ssrc));
             if (fmt == 1) {
-                LLOG(LL_TRACE, "     #%d NACK -- RTPFB (205)", pno);
+                //LLOG(LL_TRACE, "     #%d NACK -- RTPFB (205)", pno);
                 if (fixssrc && newssrcr) {
                     rtcpfb->media = htonl(newssrcr);
                 }
                 int nacks = ntohs(rtcp->length) - 2;	/* Skip SSRCs */
                 if (nacks > 0) {
-                    LLOG(LL_DEBUG, "        Got %d nacks", nacks);
+                    //LLOG(LL_DEBUG, "        Got %d nacks", nacks);
                     rtcp_nack *nack = NULL;
                     uint16_t pid = 0;
                     uint16_t blp = 0;
@@ -321,18 +321,18 @@ int rtcp_fix_ssrc(rtcp_context *ctx, char *packet, int len,
                             bitmask[j] = (blp & (1 << j)) >> j ? '1' : '0';
                         }
                         //bitmask[16] = '\n';
-                        LLOG(LL_DEBUG, "[%d] %"SCNu16" / %s", i, pid, bitmask);
+                        //LLOG(LL_DEBUG, "[%d] %"SCNu16" / %s", i, pid, bitmask);
                     }
                 }
             } else if (fmt == 3) {	/* rfc5104 */
                 /* TMMBR: http://tools.ietf.org/html/rfc5104#section-4.2.1.1 */
-                LLOG(LL_TRACE, "     #%d TMMBR -- RTPFB (205)", pno);
+                //LLOG(LL_TRACE, "     #%d TMMBR -- RTPFB (205)", pno);
                 if (fixssrc && newssrcr) {
                     uint32_t *ssrc = (uint32_t *)rtcpfb->fci;
                     *ssrc = htonl(newssrcr);
                 }
             } else {
-                LLOG(LL_TRACE, "     #%d ??? -- RTPFB (205, fmt=%d)", pno, fmt);
+                //LLOG(LL_TRACE, "     #%d ??? -- RTPFB (205, fmt=%d)", pno, fmt);
             }
             if (fixssrc && newssrcl) {
                 rtcpfb->ssrc = htonl(newssrcl);
@@ -341,23 +341,23 @@ int rtcp_fix_ssrc(rtcp_context *ctx, char *packet, int len,
         }
         case RTCP_PSFB: {
             /* PSFB, Payload-specific FB message (rfc4585) */
-            //~ LLOG(LL_TRACE, "     #%d PSFB (206)\n", pno);
+            //LLOG(LL_TRACE, "     #%d PSFB (206)", pno);
             int fmt = rtcp->rc;
-            //~ LLOG(LL_TRACE, "       -- FMT: %u\n", fmt);
+            //LLOG(LL_TRACE, "       -- FMT: %u", fmt);
             rtcp_fb *rtcpfb = (rtcp_fb *)rtcp;
-            //~ LLOG(LL_TRACE, "       -- SSRC: %u\n", ntohl(rtcpfb->ssrc));
+            //LLOG(LL_TRACE, "       -- SSRC: %u", ntohl(rtcpfb->ssrc));
             if (fmt == 1) {
                 //LLOG(LL_TRACE, "     #%d PLI -- PSFB (206)", pno);
                 if (fixssrc && newssrcr) {
                     rtcpfb->media = htonl(newssrcr);
                 }
             } else if (fmt == 2) {
-                LLOG(LL_TRACE, "     #%d SLI -- PSFB (206)", pno);
+                //LLOG(LL_TRACE, "     #%d SLI -- PSFB (206)", pno);
             } else if (fmt == 3) {
-                LLOG(LL_TRACE, "     #%d RPSI -- PSFB (206)", pno);
+                //LLOG(LL_TRACE, "     #%d RPSI -- PSFB (206)", pno);
             } else if (fmt == 4) {	/* rfc5104 */
                 /* FIR: http://tools.ietf.org/html/rfc5104#section-4.3.1.1 */
-                LLOG(LL_TRACE, "     #%d FIR -- PSFB (206)", pno);
+                //LLOG(LL_TRACE, "     #%d FIR -- PSFB (206)", pno);
                 if (fixssrc && newssrcr) {
                     rtcpfb->media = htonl(newssrcr);
                 }
@@ -367,13 +367,13 @@ int rtcp_fix_ssrc(rtcp_context *ctx, char *packet, int len,
                 }
             } else if (fmt == 5) {	/* rfc5104 */
                 /* FIR: http://tools.ietf.org/html/rfc5104#section-4.3.2.1 */
-                LLOG(LL_TRACE, "     #%d PLI -- TSTR (206)", pno);
+                //LLOG(LL_TRACE, "     #%d PLI -- TSTR (206)", pno);
                 if (fixssrc && newssrcr) {
                     uint32_t *ssrc = (uint32_t *)rtcpfb->fci;
                     *ssrc = htonl(newssrcr);
                 }
             } else if (fmt == 15 && offset <= len - 24) {
-                //~ LLOG(LL_TRACE, "       -- This is a AFB!\n");
+                //LLOG(LL_TRACE, "       -- This is a AFB!");
                 rtcp_fb *rtcpfb = (rtcp_fb *)rtcp;
                 if (fixssrc && newssrcr) {
                     rtcpfb->ssrc = htonl(newssrcr);
@@ -388,7 +388,7 @@ int rtcp_fix_ssrc(rtcp_context *ctx, char *packet, int len,
                     /* FIXME From rtcp_utility.cc */
                     unsigned char *_ptrRTCPData = (unsigned char *)remb;
                     _ptrRTCPData += 4;	// Skip unique identifier and num ssrc
-                    //~ LLOG(LL_TRACE, " %02X %02X %02X %02X\n", _ptrRTCPData[0], _ptrRTCPData[1], _ptrRTCPData[2], _ptrRTCPData[3]);
+                    //LLOG(LL_TRACE, " %02X %02X %02X %02X", _ptrRTCPData[0], _ptrRTCPData[1], _ptrRTCPData[2], _ptrRTCPData[3]);
                     uint8_t numssrc = (_ptrRTCPData[0]);
                     uint8_t brExp = (_ptrRTCPData[1] >> 2) & 0x3F;
                     uint32_t brMantissa = (_ptrRTCPData[1] & 0x03) << 16;
@@ -396,12 +396,12 @@ int rtcp_fix_ssrc(rtcp_context *ctx, char *packet, int len,
                     brMantissa += (_ptrRTCPData[3]);
                     uint32_t bitRate = brMantissa << brExp;
                     //LLOG(LL_TRACE, "       -- -- -- REMB: %u * 2^%u = %"SCNu32" (%d SSRCs, %u)",
-                    //     brMantissa, brExp, bitRate, numssrc, ntohl(remb->ssrc[0]));
+                         //brMantissa, brExp, bitRate, numssrc, ntohl(remb->ssrc[0]));
                 } else {
-                    LLOG(LL_TRACE, "     #%d AFB ?? -- PSFB (206)", pno);
+                    //LLOG(LL_TRACE, "     #%d AFB ?? -- PSFB (206)", pno);
                 }
             } else {
-                LLOG(LL_TRACE, "     #%d ?? -- PSFB (206, fmt=%d, offset=%d, len=%d)", pno, fmt, offset, len);
+                //LLOG(LL_TRACE, "     #%d ?? -- PSFB (206, fmt=%d, offset=%d, len=%d)", pno, fmt, offset, len);
             }
             if (fixssrc && newssrcl) {
                 rtcpfb->ssrc = htonl(newssrcl);
@@ -425,11 +425,11 @@ int rtcp_fix_ssrc(rtcp_context *ctx, char *packet, int len,
         int length = ntohs(rtcp->length);
         //LLOG(LL_TRACE, "       RTCP PT %d, length: %d bytes", rtcp->type, length * 4 + 4);
         if (length == 0) {
-            //~ LLOG(LL_TRACE, "  0-length, end of compound packet\n");
+            //~ LLOG(LL_TRACE, "  0-length, end of compound packet");
             break;
         }
         total -= length * 4 + 4;
-        //~ LLOG(LL_TRACE, "     Packet has length %d (%d bytes, %d remaining), moving to next one...\n", length, length*4+4, total);
+        //LLOG(LL_TRACE, "     Packet has length %d (%d bytes, %d remaining), moving to next one...", length, length*4+4, total);
         if (total <= 0)
             break;
         if (offset + (length + 1) * (int)sizeof(uint32_t) + (int)sizeof(rtcp) > len)
@@ -1061,7 +1061,7 @@ int rtcp_cap_remb(char *packet, int len, uint32_t bitrate)
                     /* FIXME From rtcp_utility.cc */
                     unsigned char *_ptrRTCPData = (unsigned char *)remb;
                     _ptrRTCPData += 4;	/* Skip unique identifier and num ssrc */
-                    //~ LLOG(LOG_VERB, " %02X %02X %02X %02X\n", _ptrRTCPData[0], _ptrRTCPData[1], _ptrRTCPData[2], _ptrRTCPData[3]);
+                    //LLOG(LOG_VERB, " %02X %02X %02X %02X", _ptrRTCPData[0], _ptrRTCPData[1], _ptrRTCPData[2], _ptrRTCPData[3]);
                     uint8_t brExp = (_ptrRTCPData[1] >> 2) & 0x3F;
                     uint32_t brMantissa = (_ptrRTCPData[1] & 0x03) << 16;
                     brMantissa += (_ptrRTCPData[2] << 8);
@@ -1184,7 +1184,7 @@ int rtcp_remb_ssrcs(char *packet, int len, uint32_t bitrate, uint8_t numssrc)
     _ptrRTCPData[1] = (uint8_t)((newbrexp << 2) + ((newbrmantissa >> 16) & 0x03));
     _ptrRTCPData[2] = (uint8_t)(newbrmantissa >> 8);
     _ptrRTCPData[3] = (uint8_t)(newbrmantissa);
-    LLOG(LL_TRACE, "[REMB] bitrate=%"SCNu32" (%d bytes)", bitrate, 4 * (ntohs(rtcp->length) + 1));
+    //LLOG(LL_TRACE, "[REMB] bitrate=%"SCNu32" (%d bytes)", bitrate, 4 * (ntohs(rtcp->length) + 1));
     return min_len;
 }
 
@@ -1274,13 +1274,13 @@ int rtcp_nacks(char *packet, int len, struct list_head *nacks)
     while (nacks) {
         guint16 npid = GPOINTER_TO_UINT(nacks->data);
         if (npid - pid < 1) {
-            LLOG(LL_TRACE, "Skipping PID to NACK (%"SCNu16" already added)...\n", npid);
+            LLOG(LL_TRACE, "Skipping PID to NACK (%"SCNu16" already added)...", npid);
         } else if (npid - pid > 16) {
             /* We need a new block: this sequence number will be its root PID */
-            LLOG(LL_TRACE, "Adding another block of NACKs (%"SCNu16"-%"SCNu16" > 16)...\n", npid, pid);
+            LLOG(LL_TRACE, "Adding another block of NACKs (%"SCNu16"-%"SCNu16" > 16)...", npid, pid);
             words++;
             if (len < (words * 4 + 4)) {
-                LLOG(LL_ERROR, "Buffer too small: %d < %d (at least %d NACK blocks needed)\n", len, words * 4 + 4, words);
+                LLOG(LL_ERROR, "Buffer too small: %d < %d (at least %d NACK blocks needed)", len, words * 4 + 4, words);
                 return -1;
             }
             char *new_block = packet + words * 4;

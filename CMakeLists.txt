@@ -26,13 +26,32 @@ if(PkgConfig_FOUND)
     pkg_check_modules(SYSTEMD libsystemd)
 endif()
 
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/libsrtp-2.2.0/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+#    ${aco_INCLUDE_DIRS}
+    ${cJSON_INCLUDE_DIRS}
+    ${mxml_INCLUDE_DIRS}
+    ${OPENSSL_INCLUDE_DIRS}
+    ${LIBUNWIND_INCLUDE_DIRS}
+    )
+add_definitions(-pthread -D_GNU_SOURCE -DTHREADED=1)
+set(CMAKE_C_LINK_FLAGS "${CMAKE_C_LINK_FLAGS} -no-pie")
+if(WITH_ZOOKEEPER)
+    find_library(zk_LIBRARY zookeeper_mt PATHS 3rdparty/zookeeper-3.5.4/lib NO_DEFAULT_PATH)
+    add_definitions(-DWITH_ZOOKEEPER=1)
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/zookeeper-3.5.4/include
+        )
+    target_link_libraries(rtz.gw ${zk_LIBRARY})
+endif()
+if(WITH_WSS)
+    add_definitions(-DRTZ_SERVER_SSL=1)
+endif()
 set(rtz_SRCS
 #    src/hook/aco_hook_syscall.c
     src/media/sdp.c
-    src/media/fmp4_mux.c
-    src/media/ps_rtp_demux.c
     src/media/h26x.c
-    src/media/flac_util.c
     src/media/codec_types.c
     src/media/g711.c
     src/media/rtp_demux.c
@@ -75,30 +94,6 @@ set(rtz_SRCS
     src/watchdog.c
     src/zk_util.c
 	)
-include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/libsrtp-2.2.0/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-#    ${aco_INCLUDE_DIRS}
-    ${cJSON_INCLUDE_DIRS}
-    ${osip2_INCLUDE_DIRS}
-    ${exosip_INCLUDE_DIRS}
-    ${mxml_INCLUDE_DIRS}
-    ${OPENSSL_INCLUDE_DIRS}
-    ${LIBUNWIND_INCLUDE_DIRS}
-    )
-add_definitions(-pthread -D_GNU_SOURCE -DTHREADED=1)
-set(CMAKE_C_LINK_FLAGS "${CMAKE_C_LINK_FLAGS} -no-pie")
-if(WITH_ZOOKEEPER)
-    find_library(zk_LIBRARY zookeeper_mt PATHS 3rdparty/zookeeper-3.5.4/lib NO_DEFAULT_PATH)
-    add_definitions(-DWITH_ZOOKEEPER=1)
-    include_directories(
-        ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/zookeeper-3.5.4/include
-        )
-    target_link_libraries(rtz.gw ${zk_LIBRARY})
-endif()
-if(WITH_WSS)
-    add_definitions(-DRTZ_SERVER_SSL=1)
-endif()
 add_executable(rtz.gw ${rtz_SRCS})
 if(WITH_ASAN)
     add_definitions(-fsanitize=address)
@@ -112,12 +107,9 @@ if(SYSTEMD_FOUND)
     add_definitions(-DWITH_SYSTEMD=1)
     target_link_libraries(rtz.gw ${SYSTEMD_LIBRARIES})
 endif()
-message(STATUS "ll:${LIBUNWIND_STATIC_LIBRARIES}")
 target_link_libraries(rtz.gw
 	${cJSON_LIBRARIES}
 #	${aco_LIBRARIES}
-    ${exosip_LIBRARIES}
-    ${osip2_LIBRARIES}
     ${mxml_LIBRARIES}
     ${OPENSSL_LIBRARIES}
     ${srtp2_LIBRARY}
@@ -144,3 +136,59 @@ set(CPACK_PACKAGE_VERSION ${rtzgw_VERSION})
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "libgoogle-perftools4 (>= 2.4-0)")
 set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA "${CMAKE_CURRENT_SOURCE_DIR}/dist/postinst;${CMAKE_CURRENT_SOURCE_DIR}/dist/prerm;${CMAKE_CURRENT_SOURCE_DIR}/dist/postrm;")
 include(CPack)
+
+################################################################################
+
+set(rtz_bench_SRCS
+    src/bench/rtz_bench.c
+    src/bench/rtz_client.c
+    src/media/sdp.c
+    src/media/h26x.c
+    src/media/codec_types.c
+    src/media/g711.c
+    src/media/rtp_demux.c
+    src/media/rtp_mux.c
+    src/net/dtls.c
+    src/net/dtls_bio.c
+    src/net/ice.c
+	src/net/net_util.c
+    src/net/nbuf.c
+    src/net/tcp_chan.c
+    src/net/udp_chan.c
+    src/net/http_types.c
+    src/net/stun.c
+    src/net/rtp.c
+    src/net/rtcp.c
+	src/cbuf.c
+	src/sbuf.c
+	src/event_loop.c
+    src/cfg_util.c
+    src/crash_util.c
+	src/log.c
+	src/mpsc_queue.c
+    src/algo/base64.c
+    src/algo/md5.c
+    src/algo/sha1.c
+    src/algo/hmac_sha1.c
+    src/algo/crc32.c
+    src/timestamp.c
+	)
+add_executable(rtz_bench ${rtz_bench_SRCS})
+if(WITH_ASAN)
+    add_definitions(-fsanitize=address)
+    target_link_libraries(rtz_bench asan)
+endif()
+if(WITH_TCMALLOC)
+    target_link_libraries(rtz_bench tcmalloc_and_profiler)
+endif()
+target_link_libraries(rtz_bench
+	${cJSON_LIBRARIES}
+#	${aco_LIBRARIES}
+    ${mxml_LIBRARIES}
+    ${OPENSSL_LIBRARIES}
+    ${srtp2_LIBRARY}
+    ${LIBUNWIND_STATIC_LIBRARIES}
+	pthread
+    m
+    dl
+	)

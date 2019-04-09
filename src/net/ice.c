@@ -1,4 +1,4 @@
-﻿#include "ice.h"
+#include "ice.h"
 #include "sbuf.h"
 #include "event_loop.h"
 #include "udp_chan.h"
@@ -31,14 +31,6 @@ enum ice_candidate_type {
     ICE_CAND_TYPE_PRFLX,
     ICE_CAND_TYPE_SRFLX,
     ICE_CAND_TYPE_RELAY,
-};
-
-enum ice_payload_type {
-    INVALID_ICE_PAYLOAD = -1,
-    ICE_PAYLOAD_STUN,
-    ICE_PAYLOAD_DTLS,
-    ICE_PAYLOAD_RTP,
-    ICE_PAYLOAD_RTCP,
 };
 
 enum {
@@ -197,7 +189,6 @@ static void ice_udp_data_handler(udp_chan_t *chan, const void *data, int size,
                               void *udata);
 static void ice_udp_error_handler(udp_chan_t *chan, int status, void *udata);
 static uint32_t get_priority(enum ice_candidate_type type, int local_preference, int component);
-static enum ice_payload_type get_payload_type(const void *data, int size);
 static void stun_handler(ice_server_t *srv, const void *data, int size,
                          const struct sockaddr *addr, socklen_t addrlen,
                          tcp_chan_t *tcp_chan);
@@ -401,7 +392,7 @@ void ice_udp_data_handler(udp_chan_t *chan, const void *data, int size,
 
     ice_server_t *srv = udata;
     ice_agent_t *agent = find_agent_by_address(srv, dest_addr, addrlen, 0);
-    enum ice_payload_type type = get_payload_type(data, size);
+    enum ice_payload_type type = ice_get_payload_type(data, size);
     if (type == ICE_PAYLOAD_STUN) {
         stun_handler(srv, data, size, dest_addr, addrlen, NULL);
     } else if (type == ICE_PAYLOAD_DTLS) {
@@ -434,7 +425,7 @@ uint32_t get_priority(enum ice_candidate_type type, int local_preference, int co
     return (type_preference << 24) | (local_preference << 8) | component;
 }
 
-enum ice_payload_type get_payload_type(const void *data, int size)
+enum ice_payload_type ice_get_payload_type(const void *data, int size)
 {
     if (size <= 2)
         return INVALID_ICE_PAYLOAD;
@@ -630,12 +621,12 @@ void srtcp_handler(ice_agent_t *agent, const void *data, int size)
     char *buf = (void*)data;
     srtp_err_status_t res = srtp_unprotect_rtcp(component->dtls->srtp_in, buf, &buflen);
     if (res != srtp_err_status_ok) {
-        LLOG(LL_ERROR, "SRTCP unprotect error: %s (len=%d-->%d)\n", rtz_srtp_error_str(res), size, buflen);
+        LLOG(LL_ERROR, "SRTCP unprotect error: %s (len=%d-->%d)", rtz_srtp_error_str(res), size, buflen);
         return;
     }
     /* Check if there's an RTCP BYE: in case, let's log it */
     if (rtcp_has_bye(buf, buflen)) {
-        LLOG(LL_ERROR, "Got RTCP BYE on stream %p (component %p)\n", component->stream, component);
+        LLOG(LL_ERROR, "Got RTCP BYE on stream %p (component %p)", component->stream, component);
     }
     /* Is this audio or video? */
     int video = 0, vindex = 0;
@@ -802,7 +793,7 @@ void ice_webrtc_hangup(ice_agent_t *handle, const char *reason)
     }
     /* Stop RTCP timer */
     if (handle->rtcp_timer != -1) {
-        LLOG(LL_TRACE, "stop timer id=%d", handle->rtcp_timer);
+        //LLOG(LL_TRACE, "stop timer id=%d", handle->rtcp_timer);
         zl_timer_stop(handle->srv->loop, handle->rtcp_timer);
         handle->rtcp_timer = -1;
     }
@@ -834,7 +825,7 @@ void rtp_handler(ice_agent_t *agent, int video, const void *data, int size)
 
 void rtcp_handler(ice_agent_t *agent, int video, const void *data, int size)
 {
-    //LLOG(LL_TRACE, "%p rtcp pkt len=%d", agent, size);
+    //LLOG(LL_TRACE, "agent %p handle %p rtcp pkt len=%d", agent, agent->rtz_handle, size);
     if (size < 12)
         return;
 }
@@ -907,7 +898,7 @@ void ice_dtls_handshake_done(ice_agent_t *agent, ice_component_t *component)
 
     /* Create a source for RTCP and one for stats */
     agent->rtcp_timer = zl_timer_start(agent->srv->loop, 1000, 1000, rtcp_timeout_handler, agent);
-    LLOG(LL_TRACE, "start timer id=%d", agent->rtcp_timer);
+    //LLOG(LL_TRACE, "start timer id=%d", agent->rtcp_timer);
 
     rtz_webrtcup(agent->rtz_handle);
 }
@@ -1479,7 +1470,7 @@ void rtcp_timeout_handler(zl_loop_t *loop, int id, void *udata)
         sr->si.s_packets = htonl(stream->component->out_stats.video.packets);
         sr->si.s_octets = htonl(stream->component->out_stats.video.bytes);
         rtcp_sdes *sdes = (rtcp_sdes *)&rtcpbuf[28];
-        rtcp_sdes_cname((char *)sdes, sdeslen, "rtzvideo", 8);
+        rtcp_sdes_cname((char *)sdes, sdeslen, "rtz", 3);
         sdes->chunk.ssrc = htonl(stream->video_ssrc);
         ice_send_rtcp(handle, 1, rtcpbuf, srlen + sdeslen);
     }
@@ -1519,7 +1510,7 @@ void rtcp_timeout_handler(zl_loop_t *loop, int id, void *udata)
         sr->si.s_packets = htonl(stream->component->out_stats.audio.packets);
         sr->si.s_octets = htonl(stream->component->out_stats.audio.bytes);
         rtcp_sdes *sdes = (rtcp_sdes *)&rtcpbuf[28];
-        rtcp_sdes_cname((char *)sdes, sdeslen, "rtzaudio", 8);
+        rtcp_sdes_cname((char *)sdes, sdeslen, "rtz", 3);
         sdes->chunk.ssrc = htonl(stream->audio_ssrc);
         ice_send_rtcp(handle, 0, rtcpbuf, srlen + sdeslen);
     }
@@ -1556,12 +1547,13 @@ void ice_tcp_data_handler(tcp_chan_t *chan, void *udata)
         if (qlen >= 2 + size) {
             tcp_chan_read(chan, buf, 2);
             tcp_chan_read(chan, data, size);
+            //LLOG(LL_DEBUG, "pkt size %d data=%02hhx%02hhx", size, ((uint8_t*)data)[0], ((uint8_t*)data)[1]);
             struct sockaddr_in addr_in;
             struct sockaddr *addr = (struct sockaddr*)&addr_in;
             int addrlen = sizeof(struct sockaddr_in);
             tcp_chan_get_peername(chan, addr, addrlen);
             ice_agent_t *agent = find_agent_by_address(srv, addr, addrlen, 1);
-            enum ice_payload_type type = get_payload_type(data, size);
+            enum ice_payload_type type = ice_get_payload_type(data, size);
             if (type == ICE_PAYLOAD_STUN) {
                 stun_handler(srv, data, size, addr, addrlen, chan);
             } else if (type == ICE_PAYLOAD_DTLS) {

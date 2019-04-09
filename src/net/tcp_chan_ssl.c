@@ -1,4 +1,4 @@
-﻿#include "tcp_chan_ssl.h"
+#include "tcp_chan_ssl.h"
 #include "nbuf.h"
 #include "net_util.h"
 #include "event_loop.h"
@@ -376,7 +376,7 @@ read_again:
                     chan->read_cb(chan, chan->udata);
             } else if (n < 0) {
                 err = SSL_get_error(chan->ssl, n);
-                if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_READ) {
+                if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
                     do {
                         iov_cnt = 1;
                         nbuf_reserve(chan->snd_buf, iov, &iov_cnt);

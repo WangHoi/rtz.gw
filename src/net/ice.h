@@ -19,6 +19,14 @@ enum {
     ICE_HANDLE_WEBRTC_GOT_ANSWER = (1 << 15),
 };
 
+enum ice_payload_type {
+    INVALID_ICE_PAYLOAD = -1,
+    ICE_PAYLOAD_STUN,
+    ICE_PAYLOAD_DTLS,
+    ICE_PAYLOAD_RTP,
+    ICE_PAYLOAD_RTCP,
+};
+
 typedef struct zl_loop_t zl_loop_t;
 typedef struct ice_component_t ice_component_t;
 typedef struct ice_stream_t ice_stream_t;
@@ -99,3 +107,5 @@ void ice_send_rtcp(ice_agent_t *agent, int video, const void *data, int size);
 void ice_send_dtls(ice_agent_t *agent, const void *data, int size);
 
 void ice_prepare_video_keyframe(ice_agent_t *agent);
+
+enum ice_payload_type ice_get_payload_type(const void *data, int size);
