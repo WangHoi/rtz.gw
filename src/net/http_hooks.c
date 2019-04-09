@@ -10,7 +10,7 @@
 #include <cJSON.h>
 
 enum {
-    HTTP_HOOK_TIMEOUT_MSECS = 5000,
+    HTTP_HOOK_TIMEOUT_MSECS = 3000,
 };
 
 extern const char *RTZ_LOCAL_IP;

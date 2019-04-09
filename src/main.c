@@ -176,12 +176,10 @@ int main(int argc, char *argv[])
 
     rtz_server_stop(g_rtz_srv);
 
-    int i, n;
-    for (i = 0; i < 5; ++i) {
-        n = zl_poll(main_loop, 1000);
-        if (n == 0)
-            break;
-    };
+    long long ts = zl_timestamp();
+    do {
+        zl_poll(main_loop, 100);
+    } while (ts + 5000 > zl_timestamp());
 
     stop_watchdog();
 
