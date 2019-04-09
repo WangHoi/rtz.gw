@@ -1,4 +1,5 @@
 #pragma once
+#include "macro_util.h"
 #include <stdarg.h>
 
 typedef struct sbuf_t {

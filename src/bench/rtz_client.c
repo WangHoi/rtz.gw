@@ -68,6 +68,9 @@ struct rtz_client_t {
     srtp_policy_t remote_policy;
     /** libsrtp policy for outgoing SRTP packets */
     srtp_policy_t local_policy;
+
+    long recv_bytes;
+    long send_bytes;
 };
 
 static void rtz_client_data_handler(tcp_chan_t *chan, void *udata);
@@ -115,6 +118,8 @@ rtz_client_t *rtz_client_new(zl_loop_t *loop)
 
 void rtz_client_del(rtz_client_t *client)
 {
+    LLOG(LL_TRACE, "del client %p recv_bytes=%ld send_bytes=%ld",
+         client, client->recv_bytes, client->send_bytes);
     if (!client)
         return;
     if (client->chan)
@@ -137,6 +142,23 @@ void rtz_client_del(rtz_client_t *client)
     sbuf_del(client->ice_rip);
     sbuf_del(client->rhash);
     sbuf_del(client->rfingerprint);
+    if (client->ssl != NULL) {
+        SSL_free(client->ssl);
+        client->ssl = NULL;
+    }
+    /* BIOs are destroyed by SSL_free */
+    client->read_bio = NULL;
+    client->write_bio = NULL;
+    if (client->srtp_valid) {
+        if (client->srtp_in) {
+            srtp_dealloc(client->srtp_in);
+            client->srtp_in = NULL;
+        }
+        if (client->srtp_out) {
+            srtp_dealloc(client->srtp_out);
+            client->srtp_out = NULL;
+        }
+    }
     free(client);
 }
 
@@ -527,6 +549,7 @@ void rtz_media_data_handler(tcp_chan_t *chan, void *udata)
             /*LLOG(LL_TRACE, "got rtp size %d", len)*/;
         else if (type == ICE_PAYLOAD_RTCP)
             /*LLOG(LL_TRACE, "got rtcp size %d", len)*/;
+        rtz_update_stats(client, 2 + len, 0);
     }
 }
 
@@ -567,6 +590,7 @@ void send_media_data(rtz_client_t *client, const void *data, int size)
     hdr[1] = size & 0xff;
     tcp_chan_write(client->media_chan, hdr, 2);
     tcp_chan_write(client->media_chan, data, size);
+    rtz_update_stats(client, 0, 2 + size);
 }
 
 void rtz_client_stun_timeout_handler(zl_loop_t *loop, int timer, void *udata)
@@ -885,4 +909,11 @@ void rtz_client_srtp_create(rtz_client_t *client)
     SSL_set_options(client->ssl, flags);
     SSL_set_tmp_ecdh(client->ssl, ecdh);
     EC_KEY_free(ecdh);
+}
+
+void rtz_update_stats(void *rtz_handle, int recv_bytes, int send_bytes)
+{
+    rtz_client_t *client = rtz_handle;
+    client->recv_bytes += recv_bytes;
+    client->send_bytes += send_bytes;
 }

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 project(rtz.gw C ASM)
-set(rtzgw_VERSION "0.1.0")
+set(rtzgw_VERSION "0.1.1")
 
 set(OPENSSL_ROOT_DIR 3rdparty/openssl-1.1.0j)
 set(OPENSSL_INCLUDE_DIRS ${OPENSSL_ROOT_DIR}/include)
@@ -16,6 +16,7 @@ add_subdirectory(3rdparty/cJSON-1.7.10)
 #add_subdirectory(3rdparty/libaco-1.2.4)
 add_subdirectory(3rdparty/mxml-2.12)
 
+option(WITH_HTTP_HOOKS "enable http hooks" OFF)
 option(WITH_WSS "enable signal server WSS mode" OFF)
 option(WITH_ASAN "enable address sanitizer" OFF)
 option(WITH_TCMALLOC "link with tcmalloc" OFF)
@@ -37,17 +38,6 @@ include_directories(
     )
 add_definitions(-pthread -D_GNU_SOURCE -DTHREADED=1)
 set(CMAKE_C_LINK_FLAGS "${CMAKE_C_LINK_FLAGS} -no-pie")
-if(WITH_ZOOKEEPER)
-    find_library(zk_LIBRARY zookeeper_mt PATHS 3rdparty/zookeeper-3.5.4/lib NO_DEFAULT_PATH)
-    add_definitions(-DWITH_ZOOKEEPER=1)
-    include_directories(
-        ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/zookeeper-3.5.4/include
-        )
-    target_link_libraries(rtz.gw ${zk_LIBRARY})
-endif()
-if(WITH_WSS)
-    add_definitions(-DRTZ_SERVER_SSL=1)
-endif()
 set(rtz_SRCS
 #    src/hook/aco_hook_syscall.c
     src/media/sdp.c
@@ -67,7 +57,6 @@ set(rtz_SRCS
     src/net/rtmp_client.c
     src/net/monitor_server.c
     src/net/http_types.c
-    src/net/http_hooks.c
     src/net/rtz_server.c
     src/net/stun.c
     src/net/ice.c
@@ -76,6 +65,7 @@ set(rtz_SRCS
     src/net/rtp.c
     src/net/rtcp.c
     src/net/tcp_chan_ssl.c
+    src/net/http_hooks.c
 	src/cbuf.c
 	src/sbuf.c
 	src/event_loop.c
@@ -95,6 +85,20 @@ set(rtz_SRCS
     src/zk_util.c
 	)
 add_executable(rtz.gw ${rtz_SRCS})
+if(WITH_WSS)
+    add_definitions(-DRTZ_SERVER_SSL=1)
+endif()
+if(WITH_HTTP_HOOKS)
+    add_definitions(-DWITH_HTTP_HOOKS=1)
+endif()
+if(WITH_ZOOKEEPER)
+    find_library(zk_LIBRARY zookeeper_mt PATHS 3rdparty/zookeeper-3.5.4/lib NO_DEFAULT_PATH)
+    add_definitions(-DWITH_ZOOKEEPER=1)
+    include_directories(
+        ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/zookeeper-3.5.4/include
+        )
+    target_link_libraries(rtz.gw ${zk_LIBRARY})
+endif()
 if(WITH_ASAN)
     add_definitions(-fsanitize=address)
     target_link_libraries(rtz.gw asan)

@@ -40,13 +40,14 @@ const char *RTZ_LOCAL_IP = NULL;
 int RTZ_PUBLIC_SIGNAL_PORT = 443;
 int RTZ_LOCAL_SIGNAL_PORT = 443;
 int RTZ_PUBLIC_MEDIA_PORT = 6000;
-int RTZ_LOCAL_MEDIA_PORT = 1935; /* rtmp push */
+int RTZ_LOCAL_MEDIA_PORT = 6000; /* rtmp push */
 int RTMP_PUBLIC_PORT = 1935;
 int RTMP_LOCAL_PORT = 1935;
 const char *CERT_PEM = NULL;
 const char *CERT_KEY = NULL;
 const char *ORIGIN_HOST = NULL;
 static const char *CERT_PWD = NULL;
+const char *HTTP_HOOKS_URL = NULL; /* http://172.16.3.101:2000/streamcloud-control-service/srs/appgw/auth */
 
 rtz_server_t *g_rtz_srv = NULL;
 rtmp_server_t *g_rtmp_srv = NULL;
@@ -64,9 +65,14 @@ void signal_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata)
     zl_stop(loop);
 }
 
+static void test_http_hook_handler(zl_loop_t *loop, long client_id,
+                                   int result, void *udata)
+{
+    LLOG(LL_DEBUG, "hook client_id=%ld result=%d", client_id, result);
+}
 static void test_http_hooks(zl_loop_t *loop)
 {
-    http_hook_query(loop, "live", "", "", "", NULL, NULL);
+    http_hook_on_play(loop, "live", "rtmp://172.20.226.86/live", "stream", 123, test_http_hook_handler, NULL);
 }
 
 int main(int argc, char *argv[])
@@ -94,7 +100,7 @@ int main(int argc, char *argv[])
     cfg_t *cfg = cfg_new();
     LLOG(LL_INFO, "starting...");
 
-    ZK_HOST = cfg_get_text(cfg, "ZK_HOST", "");
+    ZK_HOST = cfg_get_text(cfg, "ZK_HOST", NULL);
     RTZ_LOCAL_IP = cfg_get_text(cfg, "RTZ_LOCAL_IP", "127.0.0.1");
     RTZ_PUBLIC_IP = cfg_get_text(cfg, "RTZ_PUBLIC_IP", RTZ_LOCAL_IP);
     RTZ_LOCAL_SIGNAL_PORT = cfg_get_int(cfg, "RTZ_LOCAL_SIGNAL_PORT", 443);
@@ -106,6 +112,7 @@ int main(int argc, char *argv[])
     CERT_PEM = cfg_get_text(cfg, "CERT_PEM", "rtz.pem");
     CERT_KEY = cfg_get_text(cfg, "CERT_KEY", "rtz.key");
     ORIGIN_HOST = cfg_get_text(cfg, "ORIGIN_HOST", NULL);
+    HTTP_HOOKS_URL = cfg_get_text(cfg, "HTTP_HOOKS_URL", NULL);
     LLOG(LL_INFO, "ZK_HOST=%s", ZK_HOST);
     LLOG(LL_INFO, "RTZ_LOCAL_IP:SIGNAL_PORT,MEDIA_PORT,RTMP_PORT=%s:%d,%d,%d",
          RTZ_LOCAL_IP, RTZ_LOCAL_SIGNAL_PORT, RTZ_LOCAL_MEDIA_PORT, RTMP_LOCAL_PORT);
@@ -113,7 +120,8 @@ int main(int argc, char *argv[])
          RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT, RTZ_PUBLIC_MEDIA_PORT, RTMP_PUBLIC_PORT);
     LLOG(LL_INFO, "CERT_PEM=%s", CERT_PEM);
     LLOG(LL_INFO, "CERT_KEY=%s", CERT_KEY);
-    LLOG(LL_INFO, "ORIGIN_HOST=%s", ORIGIN_HOST ?: "<NULL>");
+    LLOG(LL_INFO, "ORIGIN_HOST=%s", ORIGIN_HOST);
+    LLOG(LL_INFO, "HTTP_HOOKS_URL=%s", HTTP_HOOKS_URL);
 
     SSL_library_init();
     SSL_load_error_strings();
@@ -147,7 +155,7 @@ int main(int argc, char *argv[])
     monitor_server_bind(mon_srv, RTMP_LOCAL_PORT + 50);
     monitor_server_start(mon_srv);
 
-    if (strlen(ZK_HOST))
+    if (ZK_HOST)
         start_zk_registry(main_loop);
 
     //start_zk_thread();
@@ -163,7 +171,7 @@ int main(int argc, char *argv[])
         //sleep(1);
 	}
 
-    if (strlen(ZK_HOST))
+    if (ZK_HOST)
         stop_zk_registry();
 
     rtz_server_stop(g_rtz_srv);

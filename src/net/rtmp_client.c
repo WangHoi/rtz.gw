@@ -1,4 +1,4 @@
-﻿#include "rtmp_client.h"
+#include "rtmp_client.h"
 #include "event_loop.h"
 #include "sbuf.h"
 #include "net_util.h"
@@ -226,8 +226,8 @@ void rtmp_client_set_uri(rtmp_client_t *client, const char *uri)
             sbuf_strcpy(client->app, p + 1);
         }
     }
-    LLOG(LL_TRACE, "ip=%s port=%hu app=%s stream=%s", client->ip->data,
-         client->port, client->app->data, client->stream->data);
+    //LLOG(LL_TRACE, "ip=%s port=%hu app=%s stream=%s", client->ip->data,
+    //     client->port, client->app->data, client->stream->data);
 }
 
 void rtmp_client_tcp_connect(rtmp_client_t *client, zl_defer_cb func)

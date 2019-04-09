@@ -404,6 +404,8 @@ void ice_udp_data_handler(udp_chan_t *chan, const void *data, int size,
     } else {
         LLOG(LL_WARN, "unhandled muxed payload type=%d", type);
     }
+    if (agent)
+        rtz_update_stats(agent->rtz_handle, size, 0);
 }
 
 void ice_udp_error_handler(udp_chan_t *chan, int status, void *udata)
@@ -491,6 +493,7 @@ void stun_handler(ice_server_t *srv, const void *data, int size,
                  ufrag1, host, serv);
             return;
         }
+
         // start DTLS handshake
         dtls_srtp_handshake(agent->stream->component->dtls);
 
@@ -992,6 +995,7 @@ void ice_send_packet(ice_agent_t *agent, ice_queued_packet_t *pkt)
     if (pkt->type == ICE_PACKET_DTLS || pkt->type == ICE_PACKET_STUN) {
         /* Immediate send */
         ice_component_send(component, pkt->data, pkt->length);
+        update_stats(component, pkt);
         ice_free_queued_packet(pkt);
     } else if (pkt->type == ICE_PACKET_AUDIO_RTCP || pkt->type == ICE_PACKET_VIDEO_RTCP) {
         /* RTCP */
@@ -1007,6 +1011,7 @@ void ice_send_packet(ice_agent_t *agent, ice_queued_packet_t *pkt)
         if (pkt->encrypted) {
             /* Already SRTCP */
             ice_component_send(component, pkt->data, pkt->length);
+            update_stats(component, pkt);
             ice_free_queued_packet(pkt);
         } else {
             int plen = pkt->length;
@@ -1028,6 +1033,7 @@ void ice_send_packet(ice_agent_t *agent, ice_queued_packet_t *pkt)
                 list_add_tail(&pkt->link, &agent->pkt_list);
             } else {
                 ice_component_send(component, pkt->data, plen);
+                update_stats(component, pkt);
                 ice_free_queued_packet(pkt);
             }
         }
@@ -1113,6 +1119,7 @@ void ice_send_packet_old(ice_agent_t *agent, ice_queued_packet_t *pkt)
             //    JANUS_LOG(LL_ERROR, "[%"SCNu64"] ... only sent %d bytes? (was %d)\n", handle->handle_id, sent, pkt->length);
             //}
             int sent = ice_component_send(component, pkt->data, pkt->length);
+            update_stats(component, pkt);
             if (sent < pkt->length) {
                 LLOG(LL_ERROR, " ... only sent %d bytes? (was %d)", sent, pkt->length);
             }
@@ -1565,6 +1572,8 @@ void ice_tcp_data_handler(tcp_chan_t *chan, void *udata)
             } else {
                 LLOG(LL_WARN, "unhandled muxed payload type=%d", type);
             }
+            if (agent)
+                rtz_update_stats(agent->rtz_handle, 2 + size, 0);
         } else {
             break;
         }
@@ -1693,4 +1702,9 @@ void update_stats(ice_component_t *component, ice_queued_packet_t *pkt)
         /* Update sent packets counter */
         ++stream->video_rtcp_ctx->sent_packets_since_last_rr;
     }
+
+    int len = pkt->length;
+    if (stream->agent->peer_tcp)
+        len += 2; /* 2 bytes frame header */
+    rtz_update_stats(stream->agent->rtz_handle, 0, len);
 }

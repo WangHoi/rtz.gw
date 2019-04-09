@@ -15,3 +15,5 @@ void rtz_client_open(rtz_client_t *client, const char *ip, int port);
 void rtz_client_play(rtz_client_t *client, const char *url);
 /** Destroy session. */
 void rtz_client_close(rtz_client_t *client);
+/** Update stats. */
+void rtz_update_stats(void *rtz_handle, int recv_bytes, int send_bytes);

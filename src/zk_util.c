@@ -177,11 +177,11 @@ void zk_update(zhandle_t *handle, const char *real_path,
     if (ORIGIN_HOST) {
         snprintf(text, sizeof(text), "{\"public_host\": \"%s:%d\",\"local_host\": \"%s:%d\","
                  " \"origin_host\":\"%s\", \"mode\":2, \"load\": %d}",
-                 public_ip, public_port, local_ip, local_port, ORIGIN_HOST, rtz_get_stats(g_rtz_srv));
+                 public_ip, public_port, local_ip, local_port, ORIGIN_HOST, rtz_get_load(g_rtz_srv));
     } else {
         snprintf(text, sizeof(text), "{\"public_host\": \"%s:%d\",\"local_host\": \"%s:%d\","
                  " \"origin_host\":\"%s:%d\", \"mode\":1, \"load\": %d}",
-                 public_ip, public_port, local_ip, local_port, local_ip, local_port, rtz_get_stats(g_rtz_srv));
+                 public_ip, public_port, local_ip, local_port, local_ip, local_port, rtz_get_load(g_rtz_srv));
     }
     int ret = zoo_set(handle, real_path, text, strlen(text), -1);
     if (ret != ZOK) {

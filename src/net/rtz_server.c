@@ -13,6 +13,7 @@
 #include "net/tcp_chan.h"
 #include "net/tcp_chan_ssl.h"
 #include "net/udp_chan.h"
+#include "net/http_hooks.h"
 #include "algo/sha1.h"
 #include "ice.h"
 #include "dtls.h"
@@ -136,6 +137,7 @@ typedef struct rtz_session_t {
 } rtz_session_t;
 
 typedef struct rtz_handle_t {
+    zl_loop_t *loop;
     sbuf_t *id;
     sbuf_t *url;
     sbuf_t *app;
@@ -146,6 +148,11 @@ typedef struct rtz_handle_t {
     ice_agent_t *ice;
     int flag;
     int sdp_version;
+
+    long hook_client_id;            /* http hook, -1 if invalid */
+    long recv_bytes;
+    long send_bytes;
+
     uint16_t min_playout_delay;     /* playout delay in frames: nodelay:0, balanced:8, smooth:16 */
     struct list_head link;          /* link to rtz_session_t.handle_list */
     struct list_head stream_link;   /* link to rtz_stream_t.handle_list */
@@ -182,6 +189,7 @@ static void handle_message(http_peer_t *peer, const char *transaction,
 static rtz_session_t *find_session(rtz_server_t *srv, const char *session_id);
 static rtz_handle_t *find_handle(rtz_server_t *srv, const char *session_id,
                                  const char *handle_id);
+static rtz_handle_t *find_handle2(rtz_server_t *srv, long client_id);
 static rtz_stream_t *find_stream(rtz_server_t *srv, const char *stream_name);
 static void process_sdp_answer(http_peer_t *peer, const char *transaction,
                                const char *session_id, const char *handle_id,
@@ -194,6 +202,8 @@ static void rtz_session_del(rtz_session_t *session);
 static void parse_url(rtz_handle_t *h, const char *url);
 static cJSON *make_streaming_event(rtz_handle_t *handle, const char *ename, cJSON **presult);
 static void rtz_server_cron(zl_loop_t *loop, int timerid, void *udata);
+static void rtz_handle_on_play_hook_handler(zl_loop_t *loop, long client_id,
+                                            int result, void *udata);
 
 rtz_server_t *rtz_server_new(zl_loop_t *loop)
 {
@@ -240,13 +250,27 @@ int rtz_server_start(rtz_server_t *srv)
 }
 void rtz_server_stop(rtz_server_t *srv)
 {
-    http_peer_t *p, *tmp;
-    list_for_each_entry_safe(p, tmp, &srv->peer_list, link) {
-        http_peer_del(p);
+    http_peer_t *peer, *peer_tmp;
+    list_for_each_entry_safe(peer, peer_tmp, &srv->peer_list, link) {
+        http_peer_del(peer);
     }
-    rtz_session_t *s, *stmp;
-    list_for_each_entry_safe(s, stmp, &srv->session_list, link) {
-        rtz_session_del(s);
+    rtz_session_t *session, *session_tmp;
+    list_for_each_entry_safe(session, session_tmp, &srv->session_list, link) {
+        rtz_session_del(session);
+    }
+    rtz_stream_t *stream, *stream_tmp;
+    list_for_each_entry_safe(stream, stream_tmp, &srv->stream_list, link) {
+        if (ORIGIN_HOST) { /* edge mode */
+            rtz_stream_del(stream);
+        } else {
+            if (stream->rtmp_peer) {
+                /* Calling rtmp_peer_del() will del rtz_stream_t */
+                rtmp_peer_del(stream->rtmp_peer);
+                stream->rtmp_peer = NULL;
+            } else {
+                rtz_stream_del(stream);
+            }
+        }
     }
 }
 
@@ -477,6 +501,7 @@ void peer_data_handler(TCP_CHAN_T *chan, void *udata)
     }
     if ((peer->flag & HTTP_PEER_ERROR)
         || (peer->flag & HTTP_PEER_CLOSE_ASAP)) {
+        LLOG(LL_ERROR, "peer %p flag %d, deleting.", peer, peer->flag);
         http_peer_del(peer);
     }
 }
@@ -484,6 +509,7 @@ void peer_data_handler(TCP_CHAN_T *chan, void *udata)
 void peer_error_handler(TCP_CHAN_T *chan, int status, void *udata)
 {
     http_peer_t *peer = udata;
+    LLOG(LL_ERROR, "peer %p event %d, deleting.", peer, status);
     http_peer_del(peer);
 }
 
@@ -713,8 +739,8 @@ void create_handle(http_peer_t *peer, const char *transaction, const char *sessi
     }
 
     rtz_handle_t *handle = malloc(sizeof(rtz_handle_t));
-    LLOG(LL_TRACE, "rtz_handle_new %p", handle);
     memset(handle, 0, sizeof(rtz_handle_t));
+    handle->loop = peer->srv->loop;
     handle->session = session;
     handle->id = sbuf_random_string(12);
     handle->url = sbuf_new();
@@ -726,8 +752,16 @@ void create_handle(http_peer_t *peer, const char *transaction, const char *sessi
     handle->min_playout_delay = min_playout_delay;
     handle->ice = ice_agent_new(peer->srv->ice_srv, handle);
     list_add(&handle->link, &session->handle_list);
-
     handle->stream = find_stream(peer->srv, handle->stream_name->data);
+
+    /* hook */
+    handle->hook_client_id = lrand48();
+    http_hook_on_play(handle->loop, handle->app->data, handle->tc_url->data,
+                      handle->stream_name->data, handle->hook_client_id,
+                      rtz_handle_on_play_hook_handler, peer->srv);
+
+    LLOG(LL_TRACE, "rtz_handle_new %p(client_id=%ld)", handle, handle->hook_client_id);
+
     if (handle->stream) {
         LLOG(LL_INFO, "handle %p join stream %p(%s)",
              handle, handle->stream, handle->stream_name->data);
@@ -946,11 +980,24 @@ rtz_handle_t *find_handle(rtz_server_t *srv, const char *session_id,
     rtz_session_t *session;
     list_for_each_entry(session, &srv->session_list, link) {
         if (!strcmp(session->id->data, session_id)) {
-            rtz_handle_t *stream;
-            list_for_each_entry(stream, &session->handle_list, link) {
-                if (!strcmp(stream->id->data, handle_id))
-                    return stream;
+            rtz_handle_t *handle;
+            list_for_each_entry(handle, &session->handle_list, link) {
+                if (!strcmp(handle->id->data, handle_id))
+                    return handle;
             }
+        }
+    }
+    return NULL;
+}
+
+rtz_handle_t *find_handle2(rtz_server_t *srv, long client_id)
+{
+    rtz_session_t *session;
+    list_for_each_entry(session, &srv->session_list, link) {
+        rtz_handle_t *handle;
+        list_for_each_entry(handle, &session->handle_list, link) {
+            if (handle->hook_client_id == client_id)
+                return handle;
         }
     }
     return NULL;
@@ -1072,7 +1119,7 @@ void rtz_stream_del(rtz_stream_t *stream)
                 send_json(h->session->peer, json);
                 cJSON_Delete(json);
             }
-            ice_webrtc_hangup(h->ice, "UnPublish");
+            ice_webrtc_hangup(h->ice, "Unpublish");
             rtz_handle_del(h);
         }
     }
@@ -1177,7 +1224,16 @@ void rtz_hangup(void *rtz_handle)
     }
 }
 
-int rtz_get_stats(rtz_server_t *srv)
+void rtz_update_stats(void *rtz_handle, int recv_bytes, int send_bytes)
+{
+    rtz_handle_t *handle = rtz_handle;
+    if (handle) {
+        handle->recv_bytes += recv_bytes;
+        handle->send_bytes += send_bytes;
+    }
+}
+
+int rtz_get_load(rtz_server_t *srv)
 {
     if (!srv)
         return 0;
@@ -1256,6 +1312,13 @@ void rtz_handle_del(rtz_handle_t *handle)
         ice_flags_set(handle->ice, ICE_HANDLE_WEBRTC_STOP);
         ice_webrtc_hangup(handle->ice, "DestroyHandle");
         handle->ice = NULL;
+    }
+    /* http hook */
+    if (handle->hook_client_id != -1) {
+        http_hook_on_stop(handle->loop, handle->app->data, handle->tc_url->data,
+                          handle->stream_name->data, handle->hook_client_id);
+        http_hook_on_close(handle->loop, handle->app->data, handle->tc_url->data, handle->stream_name->data,
+                           handle->recv_bytes, handle->send_bytes, handle->hook_client_id);
     }
     list_del(&handle->link);
     sbuf_del(handle->stream_name);
@@ -1358,4 +1421,19 @@ void rtz_server_cron(zl_loop_t *loop, int timerid, void *udata)
             }
         }
     }
+}
+
+void rtz_handle_on_play_hook_handler(zl_loop_t *loop, long client_id, int result, void *udata)
+{
+    /* Succeeds or timeout, no need to kill */
+    if (result >= 0 || result == HTTP_HOOK_TIMEOUT_ERROR)
+        return;
+    rtz_server_t *srv = udata;
+    rtz_handle_t *handle = find_handle2(srv, client_id);
+    if (handle) {
+        LLOG(LL_ERROR, "handle %p(client_id=%ld) http hook error %d", handle, client_id, result);
+        handle->hook_client_id = -1;
+        rtz_handle_del(handle);
+    }
+    
 }

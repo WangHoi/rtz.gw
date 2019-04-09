@@ -187,6 +187,8 @@ http_request_t *http_request_new(void *peer)
 
 void http_request_del(http_request_t *req)
 {
+    if (!req)
+        return;
     http_header_t *h, *tmp;
     list_for_each_entry_safe(h, tmp, &req->header_list, link) {
         free(h->name);
@@ -425,6 +427,8 @@ http_response_t *http_response_new(void *peer)
 
 void http_response_del(http_response_t *response)
 {
+    if (!response)
+        return;
     http_header_t *h, *tmp;
     list_for_each_entry_safe(h, tmp, &response->header_list, link) {
         free(h->name);
