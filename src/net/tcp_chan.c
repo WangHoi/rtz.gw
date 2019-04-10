@@ -1,4 +1,4 @@
-﻿#include "tcp_chan.h"
+#include "tcp_chan.h"
 #include "nbuf.h"
 #include "net_util.h"
 #include "event_loop.h"
@@ -45,6 +45,7 @@ struct tcp_chan_t {
     void *udata;
     int eevents;
     int flags;
+    int utag; /* usertag */
 };
 
 static void srv_fd_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata);
@@ -145,7 +146,8 @@ void tcp_chan_close(tcp_chan_t *chan, int flush_write)
     //LLOG(LL_TRACE, "close fd %d", chan->fd);
     if (chan->eevents) {
         chan->eevents = 0;
-        zl_fd_ctl(chan->loop, EPOLL_CTL_DEL, chan->fd, 0, NULL, NULL);
+        if (chan->loop)
+            zl_fd_ctl(chan->loop, EPOLL_CTL_DEL, chan->fd, 0, NULL, NULL);
     }
     nbuf_del(chan->rcv_buf);
     nbuf_del(chan->snd_buf);
@@ -244,7 +246,8 @@ read_again:
                 chan->read_cb(chan, chan->udata);
         }
     }
-    if (!(chan->flags & TCP_CHAN_ERROR)
+    if (chan->loop
+        && !(chan->flags & TCP_CHAN_ERROR)
         && (events & (EPOLLOUT | EPOLLERR | EPOLLHUP))) {
 
         if (chan->flags & TCP_CHAN_CONNECTING) {
@@ -288,7 +291,7 @@ write_again:
         }
     }
 
-    if (chan->flags & TCP_CHAN_ERROR) {
+    if (chan->loop && (chan->flags & TCP_CHAN_ERROR)) {
         if (chan->error_cb)
             chan->error_cb(chan, err, chan->udata);
     }
@@ -297,7 +300,7 @@ write_again:
     chan->flags &= ~TCP_CHAN_IN_EVENT_CB;
 
     /* check deferred close */
-    if (chan->flags & TCP_CHAN_CLOSING) {
+    if (chan->loop && (chan->flags & TCP_CHAN_CLOSING)) {
         if (nbuf_empty(chan->snd_buf))
             tcp_chan_close(chan, 0);
     }
@@ -305,6 +308,8 @@ write_again:
 
 void update_chan_events(tcp_chan_t* chan)
 {
+    if (!chan->loop)
+        return;
     int pevents = 0;
     if (!(chan->flags & TCP_CHAN_ERROR)) {
         if (!(chan->flags & TCP_CHAN_CLOSING))
@@ -369,4 +374,53 @@ tcp_chan_t *tcp_connect(zl_loop_t *loop, const char *ip, unsigned port)
 err_out:
     free(chan);
     return NULL;
+}
+
+void tcp_chan_detach(tcp_chan_t *chan)
+{
+    if (chan->eevents)
+        zl_fd_ctl(chan->loop, EPOLL_CTL_DEL, chan->fd, 0, NULL, NULL);
+    chan->loop = NULL;
+    chan->udata = NULL;
+    WRITE_FENCE;
+}
+
+void tcp_chan_attach(tcp_chan_t *chan, zl_loop_t *loop, void *udata)
+{
+    chan->loop = loop;
+    chan->udata = udata;
+    if (chan->eevents)
+        zl_fd_ctl(chan->loop, EPOLL_CTL_ADD, chan->fd, chan->eevents, chan_fd_event_handler, chan);
+
+    chan->flags |= TCP_CHAN_IN_EVENT_CB;
+    if (!(chan->flags & TCP_CHAN_ERROR)) {
+        if (chan->read_cb)
+            chan->read_cb(chan, chan->udata);
+    }
+    if (chan->loop
+        && !(chan->flags & TCP_CHAN_ERROR)) {
+        if (chan->write_cb)
+            chan->write_cb(chan, chan->udata);
+    }
+    if (chan->loop
+        && (chan->flags & TCP_CHAN_ERROR)) {
+        if (chan->error_cb)
+            chan->error_cb(chan, -1, chan->udata);
+    }
+    update_chan_events(chan);
+    chan->flags &= ~TCP_CHAN_IN_EVENT_CB;
+    /* check deferred close */
+    if (chan->loop && (chan->flags & TCP_CHAN_CLOSING)) {
+        if (nbuf_empty(chan->snd_buf))
+            tcp_chan_close(chan, 0);
+    }
+}
+
+void tcp_chan_set_usertag(tcp_chan_t *chan, int tag)
+{
+    chan->utag = tag;
+}
+int tcp_chan_get_usertag(tcp_chan_t *chan)
+{
+    return chan->utag;
 }

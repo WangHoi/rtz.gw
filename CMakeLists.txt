@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+﻿cmake_minimum_required(VERSION 3.10)
 project(rtz.gw C ASM)
 set(rtzgw_VERSION "0.1.1")
 
@@ -83,6 +83,7 @@ set(rtz_SRCS
     src/crash_util.c
     src/watchdog.c
     src/zk_util.c
+    src/rtz_shard.c
 	)
 add_executable(rtz.gw ${rtz_SRCS})
 if(WITH_WSS)
@@ -135,6 +136,7 @@ install(FILES dist/70-rtz.gw.conf DESTINATION /etc/rsyslog.d)
 install(FILES dist/rtz.gw@.service DESTINATION /etc/systemd/system)
 
 set(CPACK_GENERATOR "DEB")
+set(CPACK_SOURCE_GENERATOR "TXZ")
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Wang Hoi")
 set(CPACK_PACKAGE_VERSION ${rtzgw_VERSION})
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "libgoogle-perftools4 (>= 2.4-0)")

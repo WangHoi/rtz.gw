@@ -1,4 +1,4 @@
-#include "event_loop.h"
+﻿#include "event_loop.h"
 #include "list.h"
 #include "mpsc_queue.h"
 #include "macro_util.h"
@@ -160,13 +160,17 @@ int zl_poll(zl_loop_t *loop, int timeout)
     ne += run_jobs(loop);
     long long ts4 = zl_time();
     long long dt = (ts4 - ts3) + (ts2 - ts1);
-    if (dt > 20)
+    if (dt > 40)
         LLOG(LL_WARN, "event loop cost %lld ms", dt);
     return ne;
 }
 
 int zl_fd_ctl(zl_loop_t *loop, int op, int fd, uint32_t events, zl_fd_event_cb func, void *udata)
 {
+    if (fd >= loop->setsize) {
+        LLOG(LL_FATAL, "fd %d larger than pollset size %d", fd, loop->setsize);
+        return -1;
+    }
     struct fd_event *fe = &loop->fds[fd];
     fe->events = events;
     fe->func = func;

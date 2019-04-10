@@ -13,6 +13,8 @@
 #include <assert.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/types.h>
+#include <sys/syscall.h>   /* For SYS_xxx definitions */
 
 #if WITH_COLOR
 #define ANSI_COLOR_RED     "\x1b[31m"
@@ -95,9 +97,10 @@ void llog_fmt(const char* filename, int fileline, const char* funcname, enum Log
 	short_filename = short_filename ? (short_filename + 1) : filename;
 
     sbuf_t *b = sbuf_new1(INITIAL_BUFSZ);
-    sbuf_appendf(b, "%02d-%02d %02d:%02d:%02d.%03d %s:%d%s",
+    sbuf_appendf(b, "%02d-%02d %02d:%02d:%02d.%03d %ld %s:%d%s",
                  t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min,
                  t.tm_sec, (int)(tp.tv_nsec / 1000000),
+                 syscall(SYS_gettid),
 	             short_filename, fileline, LL_LEVEL_NAMES[lvl]);
     va_list ap;
     va_start(ap, fmt);

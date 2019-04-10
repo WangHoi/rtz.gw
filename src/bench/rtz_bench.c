@@ -85,7 +85,7 @@ int main(int argc, char *argv[])
     tcp_ssl_init(CERT_PEM, CERT_KEY, CERT_PWD);
 #endif
 
-    zl_loop_t *main_loop = zl_loop_new(1024);
+    zl_loop_t *main_loop = zl_loop_new(4096);
     zl_loop_set_ct(main_loop);
 
     start_tests();
@@ -178,4 +178,25 @@ void stop_tests()
         rtz_client_del(test_clients[i]);
         test_clients[i] = NULL;
     }
+}
+
+/* dummy defines */
+int rtz_shard_get_index_ct()
+{
+    return -1;
+}
+
+zl_loop_t *rtz_shard_get_loop(int idx)
+{
+    return NULL;
+}
+
+void *rtz_get_ice_server(rtz_server_t *srv)
+{
+    return NULL;
+}
+
+rtz_server_t* rtz_shard_get_server_ct()
+{
+    return NULL;
 }

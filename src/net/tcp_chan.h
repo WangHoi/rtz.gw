@@ -38,3 +38,12 @@ int tcp_chan_write_buf_empty(tcp_chan_t * chan);
 int tcp_chan_write(tcp_chan_t *chan, const void *data, int size);
 int tcp_chan_get_peername(tcp_chan_t *chan, struct sockaddr *addr, int addrlen);
 int tcp_chan_fd(tcp_chan_t *chan);
+
+void tcp_chan_detach(tcp_chan_t *chan);
+/** Attach tcp_chan to another thread loop.
+ *
+ * @note Will re-trigger event cb.
+ */
+void tcp_chan_attach(tcp_chan_t *chan, zl_loop_t *loop, void *udata);
+void tcp_chan_set_usertag(tcp_chan_t *chan, int tag);
+int tcp_chan_get_usertag(tcp_chan_t *chan);

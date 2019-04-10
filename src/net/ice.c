@@ -1,4 +1,4 @@
-#include "ice.h"
+﻿#include "ice.h"
 #include "sbuf.h"
 #include "event_loop.h"
 #include "udp_chan.h"
@@ -12,6 +12,7 @@
 #include "rtcp.h"
 #include "rtp.h"
 #include "rtz_server.h"
+#include "rtz_shard.h"
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <netdb.h>
@@ -19,6 +20,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <cJSON.h>
+#include <assert.h>
 
 enum ice_candidate_state {
     ICE_CAND_STATE_EMPTY,
@@ -306,6 +308,11 @@ ice_stream_t *ice_stream_new(ice_agent_t *agent)
     stream->audio_codec = sbuf_new();
     stream->video_codec = sbuf_new();
     stream->luser = sbuf_random_string(ICE_UFRAG_LENGTH);
+    char shard_prefix = 'A';
+    int idx = rtz_shard_get_index_ct();
+    if (idx >= 0)
+        shard_prefix += idx;
+    sbuf_prependc(stream->luser, shard_prefix);
     stream->lpass = sbuf_random_string(ICE_PWD_LENGTH);
     stream->remote_hashing = sbuf_new();
     stream->remote_fingerprint = sbuf_new();
@@ -489,8 +496,8 @@ void stun_handler(ice_server_t *srv, const void *data, int size,
         char reply_msg[256];
         stun_msg_hdr_t *reply_msg_hdr = (stun_msg_hdr_t*)reply_msg;
         if (!agent) {
-            LLOG(LL_ERROR, "stun binding request: ufrag=%s, from=%s:%s, agent not found",
-                 ufrag1, host, serv);
+            //LLOG(LL_ERROR, "stun binding request: ufrag=%s, from=%s:%s shard=%d, agent not found",
+            //     ufrag1, host, serv, rtz_shard_get_index_ct());
             return;
         }
 
@@ -582,8 +589,8 @@ ice_agent_t *find_agent_by_address(ice_server_t *srv, const struct sockaddr *add
     const struct sockaddr_in *addr_in = (const struct sockaddr_in*)addr;
     list_for_each_entry(agent, &srv->agent_list, link) {
         struct sockaddr_in *peer_addr = (struct sockaddr_in*)&agent->peer_addr;
-        if (peer_addr->sin_addr.s_addr == addr_in->sin_addr.s_addr
-                && peer_addr->sin_port == addr_in->sin_port)
+        if (peer_addr->sin_port == addr_in->sin_port
+            && peer_addr->sin_addr.s_addr == addr_in->sin_addr.s_addr)
             return agent;
     }
     return NULL;
@@ -1538,37 +1545,116 @@ void ice_tcp_error_cleanup(tcp_chan_t *chan, ice_server_t *srv)
     tcp_chan_close(chan, 0);
 }
 
+static int peek_stun_binding_request(const void *data, int size, char *username)
+{
+    enum ice_payload_type type = ice_get_payload_type(data, size);
+    if (type == ICE_PAYLOAD_STUN) {
+        if (!stun_msg_verify(data, size))
+            return 0;
+        const stun_msg_hdr_t *msg_hdr = data;
+        const stun_attr_hdr_t *attr_hdr = NULL;
+        size_t attr_len;
+        if (stun_msg_type(msg_hdr) == STUN_BINDING_REQUEST) {
+            attr_hdr = stun_msg_find_attr(msg_hdr, STUN_ATTR_USERNAME);
+            attr_len = stun_attr_len(attr_hdr);
+            if (attr_len >= ICE_MAX_USERNAME_LENGTH) {
+                LLOG(LL_ERROR, "stun:USERNAME len=%d too long", (int)attr_len);
+                return 0;
+            }
+            if (attr_len < ICE_MAX_USERNAME_LENGTH) {
+                memcpy(username, stun_attr_varsize_read((stun_attr_varsize_t*)attr_hdr), attr_len);
+                username[attr_len] = 0;
+            } else {
+                memcpy(username, stun_attr_varsize_read((stun_attr_varsize_t*)attr_hdr), ICE_MAX_USERNAME_LENGTH - 1);
+                username[ICE_MAX_USERNAME_LENGTH - 1] = 0;
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int ice_get_username_shard_index(const char *username)
+{
+    int p0 = username[0] - 'A';
+    if (p0 >= 0 && p0 < MAX_RTZ_SHARDS)
+        return p0;
+    return -1;
+}
+
+/** Call on target thread loop */
+static void move_tcp_chan(zl_loop_t *loop, void *udata)
+{
+    tcp_chan_t *chan = udata;
+    rtz_server_t *srv = rtz_shard_get_server_ct();
+    //LLOG(LL_TRACE, "tcp_chan %p moved", chan);
+    tcp_chan_set_usertag(chan, 1);
+    tcp_chan_attach(chan, loop, rtz_get_ice_server(srv));
+}
+
 void ice_tcp_data_handler(tcp_chan_t *chan, void *udata)
 {
     ice_server_t *srv = udata;
-    uint8_t data[ICE_MAX_TCP_FRAME_SIZE];
+    uint8_t data[2 + ICE_MAX_TCP_FRAME_SIZE];
     int qlen = tcp_chan_get_read_buf_size(chan);
+    int size;
+
+    if (!tcp_chan_get_usertag(chan)) {
+        if (qlen >= 2) {
+            tcp_chan_peek(chan, data, 2);
+            size = (data[0] << 8) | data[1];
+            if (qlen >= 2 + size) {
+                tcp_chan_peek(chan, data, 2 + size);
+                char username[ICE_MAX_USERNAME_LENGTH];
+                if (peek_stun_binding_request(data + 2, size, username)) {
+                    char *p = strchr(username, ':');
+                    if (p)
+                        *p = 0;
+                    int cur_shard = rtz_shard_get_index_ct();
+                    int expect_shard = ice_get_username_shard_index(username);
+                    assert(cur_shard != -1);
+                    assert(expect_shard != -1);
+                    if (cur_shard != expect_shard) {
+                        tcp_chan_detach(chan);
+                        zl_loop_t *expect_loop = rtz_shard_get_loop(expect_shard);
+                        if (expect_loop)
+                            zl_invoke(expect_loop, move_tcp_chan, chan);
+                        return;
+                    } else {
+                        tcp_chan_set_usertag(chan, 1);
+                    }
+                }
+            }
+        }
+    }
+
+    struct sockaddr_in addr_in;
+    struct sockaddr *addr = (struct sockaddr*)&addr_in;
+    int addrlen = sizeof(struct sockaddr_in);
+    tcp_chan_get_peername(chan, addr, addrlen);
+    ice_agent_t *agent = find_agent_by_address(srv, addr, addrlen, 1);
+
     while (qlen >= 2) {
-        uint8_t buf[2];
-        tcp_chan_peek(chan, buf, 2);
-        int size = (buf[0] << 8) | buf[1];
+        tcp_chan_peek(chan, data, 2);
+        size = (data[0] << 8) | data[1];
         if (size > ICE_MAX_TCP_FRAME_SIZE) {
             ice_tcp_error_cleanup(chan, srv);
             break;
         }
         if (qlen >= 2 + size) {
-            tcp_chan_read(chan, buf, 2);
-            tcp_chan_read(chan, data, size);
-            //LLOG(LL_DEBUG, "pkt size %d data=%02hhx%02hhx", size, ((uint8_t*)data)[0], ((uint8_t*)data)[1]);
-            struct sockaddr_in addr_in;
-            struct sockaddr *addr = (struct sockaddr*)&addr_in;
-            int addrlen = sizeof(struct sockaddr_in);
-            tcp_chan_get_peername(chan, addr, addrlen);
-            ice_agent_t *agent = find_agent_by_address(srv, addr, addrlen, 1);
-            enum ice_payload_type type = ice_get_payload_type(data, size);
+            tcp_chan_read(chan, data, 2 + size);
+            enum ice_payload_type type = ice_get_payload_type(data + 2, size);
+            //LLOG(LL_DEBUG, "pkt type %d size %d data=%02hhx%02hhx", type, size, ((uint8_t*)data)[2], ((uint8_t*)data)[3]);
             if (type == ICE_PAYLOAD_STUN) {
-                stun_handler(srv, data, size, addr, addrlen, chan);
+                stun_handler(srv, data + 2, size, addr, addrlen, chan);
             } else if (type == ICE_PAYLOAD_DTLS) {
-                dtls_handler(agent, data, size, addr, addrlen);
+                if (!agent)
+                    agent = find_agent_by_address(srv, addr, addrlen, 1);
+                dtls_handler(agent, data + 2, size, addr, addrlen);
             } else if (type == ICE_PAYLOAD_RTP) {
-                srtp_handler(agent, data, size);
+                srtp_handler(agent, data + 2, size);
             } else if (type == ICE_PAYLOAD_RTCP) {
-                srtcp_handler(agent, data, size);
+                srtcp_handler(agent, data + 2, size);
             } else {
                 LLOG(LL_WARN, "unhandled muxed payload type=%d", type);
             }

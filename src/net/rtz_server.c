@@ -1,4 +1,4 @@
-#include "rtz_server.h"
+﻿#include "rtz_server.h"
 #include "event_loop.h"
 #include "net_util.h"
 #include "log.h"
@@ -21,6 +21,7 @@
 #include "apierror.h"
 #include "rtmp_client.h"
 #include "rtmp_server.h"
+#include "rtz_shard.h"
 #include <time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -222,6 +223,7 @@ rtz_server_t *rtz_server_new(zl_loop_t *loop)
     INIT_LIST_HEAD(&srv->session_list);
     INIT_LIST_HEAD(&srv->stream_list);
     srv->timer = zl_timer_start(loop, RTZ_CRON_TIMEOUT_MSECS, RTZ_CRON_TIMEOUT_MSECS, rtz_server_cron, srv);
+    //LLOG(LL_INFO, "shard=%d ice_srv=%p", rtz_shard_get_index_ct(), srv->ice_srv);
     return srv;
 }
 
@@ -330,7 +332,7 @@ void http_request_handler(http_peer_t *peer, http_request_t *req)
     if (peer->req_list.next != &req->link)
         return;
 
-    LLOG(LL_TRACE, "handle: %s %s", http_strmethod(req->method), req->path);
+    //LLOG(LL_TRACE, "handle: %s %s", http_strmethod(req->method), req->path);
     if (strstr(req->path, "/rtz") != req->path) {
         send_final_reply(peer, HTTP_STATUS_INTERNAL_SERVER_ERROR);
         list_del(&req->link);
@@ -718,8 +720,8 @@ void parse_url(rtz_handle_t *h, const char *url)
     } else {
         sbuf_strcpy(h->tc_url, url);
     }
-    LLOG(LL_TRACE, "parse_url('%s'): app='%s' tcUrl='%s' streamName='%s'",
-         url, h->app->data, h->tc_url->data, h->stream_name->data);
+    //LLOG(LL_TRACE, "parse_url('%s'): app='%s' tcUrl='%s' streamName='%s'",
+    //     url, h->app->data, h->tc_url->data, h->stream_name->data);
 }
 
 void create_handle(http_peer_t *peer, const char *transaction, const char *session_id,
@@ -760,7 +762,8 @@ void create_handle(http_peer_t *peer, const char *transaction, const char *sessi
                       handle->stream_name->data, handle->hook_client_id,
                       rtz_handle_on_play_hook_handler, peer->srv);
 
-    LLOG(LL_TRACE, "rtz_handle_new %p(client_id=%ld)", handle, handle->hook_client_id);
+    LLOG(LL_TRACE, "rtz_handle_new %p(client_id=%ld,luser=%s)",
+         handle, handle->hook_client_id, ice_get_luser(handle->ice));
 
     if (handle->stream) {
         LLOG(LL_INFO, "handle %p join stream %p(%s)",
@@ -776,7 +779,10 @@ void create_handle(http_peer_t *peer, const char *transaction, const char *sessi
         const char* p = strchr(handle->tc_url->data + 8, '/');
         if (p)
             sbuf_append1(origin_url, p);
-        sbuf_append1(origin_url, "|edge=1/");
+
+        //sbuf_append1(origin_url, "|edge=1/");
+        sbuf_append1(origin_url, "/");
+
         sbuf_append(origin_url, handle->stream_name);
 
         LLOG(LL_DEBUG, "handle %p pull new stream %p(%s) origin='%s'",
@@ -1084,7 +1090,7 @@ rtz_stream_t *rtz_stream_new(rtz_server_t *srv, const char *stream_name)
     list_for_each_entry(session, &srv->session_list, link) {
         list_for_each_entry(handle, &session->handle_list, link) {
             if (!strcmp(handle->stream_name->data, stream_name)) {
-                LLOG(LL_INFO, "handle %p join stream %p (name='%s')", handle, stream, stream_name);
+                LLOG(LL_INFO, "handle %p join stream %p(%s)", handle, stream, stream_name);
                 handle->stream = stream;
                 list_add(&handle->stream_link, &stream->handle_list);
             }
@@ -1108,6 +1114,8 @@ void rtz_stream_del(rtz_stream_t *stream)
     }
     rtz_handle_t *h, *tmp;
     list_for_each_entry_safe(h, tmp, &stream->handle_list, stream_link) {
+        LLOG(LL_INFO, "handle %p leave stream %p(%s)",
+             h, stream, stream->stream_name->data);
         h->stream = NULL;
         list_del(&h->stream_link);
         if (h->ice) {
@@ -1252,6 +1260,11 @@ int rtz_get_load(rtz_server_t *srv)
     return load;
 }
 
+void *rtz_get_ice_server(rtz_server_t *srv)
+{
+    return srv->ice_srv;
+}
+
 /* Write 12 bit min_playout_delay in 10ms granularity */
 static inline void update_playout_delay_ext(uint8_t *ext, uint16_t min_delay)
 {
@@ -1302,7 +1315,7 @@ void rtz_handle_del(rtz_handle_t *handle)
     LLOG(LL_TRACE, "rtz_handle_del %p", handle);
     /* Leave publish stream */
     if (handle->stream) {
-        LLOG(LL_INFO, "handle %p leave stream %p (name='%s')",
+        LLOG(LL_INFO, "handle %p leave stream %p(%s)",
              handle, handle->stream, handle->stream_name->data);
         list_del(&handle->stream_link);
         handle->stream = NULL;
