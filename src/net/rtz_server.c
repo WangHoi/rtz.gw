@@ -1,4 +1,4 @@
-﻿#include "rtz_server.h"
+#include "rtz_server.h"
 #include "event_loop.h"
 #include "net_util.h"
 #include "log.h"
@@ -388,7 +388,8 @@ void peer_ws_frame_handler(http_peer_t *peer, struct ws_frame *frame)
                 cJSON *jsep = cJSON_GetObjectItem(json, "jsep");
                 handle_message(peer, transaction, session_id, handle_id, body, jsep);
             } else if (!strcmp(type, "keepalive")) {
-                /* TODO: update session liveness */
+                uint8_t ping[4] = { 'p', 'i', 'n', 'g' };
+                send_ws_frame(peer, WS_OPCODE_PING, ping, sizeof(ping));
             } else if (!strcmp(type, "trickle")) {
                 /* ignore */
             } else {
