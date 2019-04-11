@@ -94,8 +94,8 @@ void dtls_srtp_destroy(dtls_srtp *dtls);
  * @return true if a retransmission is still needed, false otherwise */
 int dtls_retry(void *stack);
 
-/** Helper method to get a string representation of a Janus DTLS state
- * @param state The Janus DTLS state
+/** Helper method to get a string representation of a DTLS state
+ * @param state The DTLS state
  * @return A string representation of the state */
 const char *get_dtls_srtp_state(dtls_state state);
 

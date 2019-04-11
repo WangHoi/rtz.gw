@@ -774,22 +774,6 @@ int rtz_rtp_simulcasting_context_process_rtp(rtz_rtp_simulcasting_context *conte
     if (context->substream != context->substream_target) {
         /* There has been a change: let's wait for a keyframe on the target */
         int step = (context->substream < 1 && context->substream_target == 2);
-    #if 0
-        if ((ssrc == *(ssrcs + context->substream_target)) || (step && ssrc == *(ssrcs + step))) {
-            if ((vcodec == RTZ_VIDEOCODEC_VP8 && janus_vp8_is_keyframe(payload, plen)) ||
-                (vcodec == RTZ_VIDEOCODEC_H264 && janus_h264_is_keyframe(payload, plen))) {
-                uint32_t ssrc_old = 0;
-                if (context->substream != -1)
-                    ssrc_old = *(ssrcs + context->substream);
-                JANUS_LOG(LL_TRACE, "Received keyframe on SSRC %"SCNu32", switching (was %"SCNu32")\n", ssrc, ssrc_old);
-                context->substream = (ssrc == *(ssrcs + context->substream_target) ? context->substream_target : step);
-                /* Notify the caller that the substream changed */
-                context->changed_substream = 1;
-            //~ } else {
-                //~ JANUS_LOG(LOG_WARN, "Not a keyframe on SSRC %"SCNu32" yet, waiting before switching\n", ssrc);
-            }
-        }
-    #endif
     }
     /* If we haven't received our desired substream yet, let's drop temporarily */
     if (context->last_relayed == 0) {
@@ -821,34 +805,5 @@ int rtz_rtp_simulcasting_context_process_rtp(rtz_rtp_simulcasting_context *conte
         return 0;
     }
     context->last_relayed = zl_hrtimestamp();
-    /* Temporal layers are only available for VP8, so don't do anything else for other codecs */
-#if 0
-    if (vcodec == RTZ_VIDEOCODEC_VP8) {
-        /* Check if there's any temporal scalability to take into account */
-        uint16_t picid = 0;
-        uint8_t tlzi = 0;
-        uint8_t tid = 0;
-        uint8_t ybit = 0;
-        uint8_t keyidx = 0;
-        if (janus_vp8_parse_descriptor(payload, plen, &picid, &tlzi, &tid, &ybit, &keyidx) == 0) {
-            //~ JANUS_LOG(LOG_WARN, "%"SCNu16", %u, %u, %u, %u\n", picid, tlzi, tid, ybit, keyidx);
-            if (context->templayer != context->templayer_target && tid == context->templayer_target) {
-                /* FIXME We should be smarter in deciding when to switch */
-                context->templayer = context->templayer_target;
-                /* Notify the caller that the temporal layer changed */
-                context->changed_temporal = 1;
-            }
-            if (tid > context->templayer) {
-                JANUS_LOG(LL_TRACE, "Dropping packet (it's temporal layer %d, but we're capping at %d)\n",
-                          tid, context->templayer);
-                      /* We increase the base sequence number, or there will be gaps when delivering later */
-                if (sc)
-                    sc->v_base_seq++;
-                return 0;
-            }
-        }
-    }
-#endif
-    /* If we got here, the packet can be relayed */
     return 1;
 }

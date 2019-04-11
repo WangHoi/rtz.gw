@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <sys/epoll.h>
 
 #define ZL_USEC_PER_SEC 1000000
@@ -6,7 +6,6 @@
 
 typedef struct zl_loop_t zl_loop_t;
 typedef void (*zl_fd_event_cb)(zl_loop_t *loop, int fd, uint32_t events, void *udata);
-typedef void (*zl_timerfd_event_cb)(zl_loop_t *loop, int fd, uint64_t expires, void *udata);
 typedef void (*zl_timer_cb)(zl_loop_t *loop, int id, void *udata);
 typedef void (*zl_defer_cb)(zl_loop_t *loop, int64_t status, void *udata);
 typedef void (*zl_job_cb)(zl_loop_t *loop, void *udata);

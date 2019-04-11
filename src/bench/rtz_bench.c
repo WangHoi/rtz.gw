@@ -1,14 +1,12 @@
-#include "log.h"
+﻿#include "log.h"
 #include "event_loop.h"
 #include "mpsc_queue.h"
 #include "rtz_client.h"
 #include "crash_util.h"
-#include "net/monitor_server.h"
 #include "timestamp.h"
 #include "cfg_util.h"
 #include "net/ice.h"
 #include "net/dtls.h"
-#include "net/rtmp_server.h"
 #include "net/http_hooks.h"
 #include "net/tcp_chan_ssl.h"
 #include <stdio.h>
@@ -97,7 +95,7 @@ int main(int argc, char *argv[])
     zl_fd_ctl(main_loop, EPOLL_CTL_ADD, sfd, EPOLLIN, signal_event_handler, main_loop);
 
     while (!zl_loop_stopped(main_loop)) {
-        zl_poll(main_loop, 100);
+        zl_poll(main_loop, 1000);
     }
 
     stop_tests();
@@ -191,6 +189,7 @@ zl_loop_t *rtz_shard_get_loop(int idx)
     return NULL;
 }
 
+typedef struct rtz_server_t rtz_server_t;
 void *rtz_get_ice_server(rtz_server_t *srv)
 {
     return NULL;

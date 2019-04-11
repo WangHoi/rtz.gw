@@ -1,4 +1,4 @@
-﻿#include "rtz_client.h"
+#include "rtz_client.h"
 #include "sbuf.h"
 #include "event_loop.h"
 #include "net/tcp_chan.h"
@@ -901,8 +901,8 @@ void rtz_client_srtp_create(rtz_client_t *client)
     if (ecdh == NULL) {
         LLOG(LL_ERROR, "Error creating ECDH group! (%s)",
              ERR_reason_error_string(ERR_get_error()));
-        //janus_refcount_decrease(&dtls->ref);
-        // free dtls
+        SSL_free(client->ssl);
+        client->ssl = NULL;
         return;
     }
     const long flags = SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_COMPRESSION | SSL_OP_SINGLE_ECDH_USE;

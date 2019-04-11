@@ -13,7 +13,7 @@
 #define RTZ_ERROR_TRANSPORT_SPECIFIC			450
 /** The request is missing in the message */
 #define RTZ_ERROR_MISSING_REQUEST				452
-/** The Janus core does not suppurt this request */
+/** The request is not supported */
 #define RTZ_ERROR_UNKNOWN_REQUEST				453
 /** The payload is not a valid JSON message */
 #define RTZ_ERROR_INVALID_JSON				454
@@ -35,7 +35,7 @@
 #define RTZ_ERROR_PLUGIN_MESSAGE				462
 /** An error occurring when trying to detach from a plugin and destroy the related handle  */
 #define RTZ_ERROR_PLUGIN_DETACH				463
-/** The Janus core doesn't support this SDP type */
+/** The SDP type is not supported */
 #define RTZ_ERROR_JSEP_UNKNOWN_TYPE			464
 /** The Session Description provided by the peer is invalid */
 #define RTZ_ERROR_JSEP_INVALID_SDP			465

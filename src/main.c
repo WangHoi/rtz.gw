@@ -1,4 +1,4 @@
-#include "log.h"
+﻿#include "log.h"
 #include "event_loop.h"
 #include "mpsc_queue.h"
 //#include "rtsp_client.h"
@@ -7,14 +7,12 @@
 //#include "rtp_demux.h"
 //#include "h26x.h"
 #include "zk_util.h"
-#include "net/monitor_server.h"
 #include "timestamp.h"
 #include "cfg_util.h"
 //#include "hook/aco_hook_syscall.h"
 #include "net/rtz_server.h"
 #include "net/ice.h"
 #include "net/dtls.h"
-#include "net/rtmp_server.h"
 #include "net/http_hooks.h"
 #include "net/tcp_chan_ssl.h"
 #include "crash_util.h"
@@ -50,9 +48,6 @@ const char *ORIGIN_HOST = NULL;
 static const char *CERT_PWD = NULL;
 const char *HTTP_HOOKS_URL = NULL; /* http://172.16.3.101:2000/streamcloud-control-service/srs/appgw/auth */
 int RTZ_SHARDS = 1;
-
-rtz_server_t *g_rtz_srv = NULL;
-rtmp_server_t *g_rtmp_srv = NULL;
 
 void signal_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata)
 {
@@ -99,9 +94,9 @@ int main(int argc, char *argv[])
     install_crash_handler();
 
     llog_init();
-    cfg_t *cfg = cfg_new();
     LLOG(LL_INFO, "starting...");
 
+    cfg_t *cfg = cfg_new();
     RTZ_SHARDS = cfg_get_int(cfg, "RTZ_SHARDS", 1);
     ZK_HOST = cfg_get_text(cfg, "ZK_HOST", NULL);
     RTZ_LOCAL_IP = cfg_get_text(cfg, "RTZ_LOCAL_IP", "127.0.0.1");
@@ -116,6 +111,8 @@ int main(int argc, char *argv[])
     CERT_KEY = cfg_get_text(cfg, "CERT_KEY", "rtz.key");
     ORIGIN_HOST = cfg_get_text(cfg, "ORIGIN_HOST", NULL);
     HTTP_HOOKS_URL = cfg_get_text(cfg, "HTTP_HOOKS_URL", NULL);
+    cfg_del(cfg);
+
     LLOG(LL_INFO, "RTZ_SHARDS=%d", RTZ_SHARDS);
     LLOG(LL_INFO, "ZK_HOST=%s", ZK_HOST);
     LLOG(LL_INFO, "RTZ_LOCAL_IP:SIGNAL_PORT,MEDIA_PORT,RTMP_PORT=%s:%d,%d,%d",
@@ -127,6 +124,12 @@ int main(int argc, char *argv[])
     LLOG(LL_INFO, "ORIGIN_HOST=%s", ORIGIN_HOST);
     LLOG(LL_INFO, "HTTP_HOOKS_URL=%s", HTTP_HOOKS_URL);
 
+    if (!ORIGIN_HOST) {
+        LLOG(LL_FATAL, "ORIGIN_HOST is required in edge mode.");
+        llog_cleanup();
+        return - 1;
+    }
+
     SSL_library_init();
     SSL_load_error_strings();
     OpenSSL_add_all_algorithms();
@@ -135,11 +138,8 @@ int main(int argc, char *argv[])
     tcp_ssl_init(CERT_PEM, CERT_KEY, CERT_PWD);
 #endif
 
-    //test_tsc();
 	zl_loop_t *main_loop = zl_loop_new(4096);
     zl_loop_set_ct(main_loop);
-
-    //test_http_hooks(main_loop);
 
     sigemptyset(&mask);
     sigaddset(&mask, SIGINT);
@@ -147,32 +147,18 @@ int main(int argc, char *argv[])
     sfd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
     zl_fd_ctl(main_loop, EPOLL_CTL_ADD, sfd, EPOLLIN, signal_event_handler, main_loop);
 
-    //g_rtz_srv = rtz_server_new(main_loop);
-    //rtz_server_bind(g_rtz_srv, RTZ_LOCAL_SIGNAL_PORT);
-    //rtz_server_start(g_rtz_srv);
-
-    //g_rtmp_srv = rtmp_server_new(main_loop, g_rtz_srv);
-    //rtmp_server_bind(g_rtmp_srv, RTMP_LOCAL_PORT);
-    //rtmp_server_start(g_rtmp_srv);
-
-    //monitor_server_t *mon_srv = monitor_server_new(main_loop, g_rtz_srv, g_rtmp_srv);
-    //monitor_server_bind(mon_srv, RTMP_LOCAL_PORT + 50);
-    //monitor_server_start(mon_srv);
-
     if (ZK_HOST)
         start_zk_registry(main_loop);
 
     start_watchdog(main_loop);
-    start_rtz_shards();
+    start_rtz_shards(main_loop);
 
     while (!zl_loop_stopped(main_loop)) {
-        zl_poll(main_loop, 100);
+        zl_poll(main_loop, 1000);
 	}
 
     if (ZK_HOST)
         stop_zk_registry();
-
-    //rtz_server_stop(g_rtz_srv);
 
     stop_rtz_shards();
 
@@ -182,12 +168,6 @@ int main(int argc, char *argv[])
     } while (ts + 5000 > zl_timestamp());
 
     stop_watchdog();
-
- //   monitor_server_del(mon_srv);
- //   rtmp_server_del(g_rtmp_srv);
- //   g_rtmp_srv = NULL;
- //   rtz_server_del(g_rtz_srv);
- //   g_rtz_srv = NULL;
 
     zl_fd_ctl(main_loop, EPOLL_CTL_DEL, sfd, 0, NULL, NULL);
     close(sfd);
@@ -201,7 +181,6 @@ int main(int argc, char *argv[])
     EVP_cleanup();
     ERR_free_strings();
 
-    cfg_del(cfg);
     llog_cleanup();
 	return 0;
 }

@@ -15,21 +15,27 @@ struct rtz_shard_t {
     int idx;
     zl_loop_t *loop;
     rtz_server_t *rtz_srv;
+    int load;
 };
 
 extern int RTZ_SHARDS;
 extern int RTZ_LOCAL_SIGNAL_PORT;
 static rtz_shard_t *rtz_shards[MAX_RTZ_SHARDS] = {};
 static __thread int rtz_shard_index_ct = -1;
+static zl_loop_t *rtz_control_loop = NULL;
+static int rtz_total_load = 0;
 
 static rtz_shard_t *shard_new(int idx);
 static void rtz_shard_del(rtz_shard_t *d);
 static void *shard_entry(void *arg);
 static void stop_shard(zl_loop_t *loop, void *udata);
 static void after_stop_shard(zl_loop_t *loop, void *udata);
+static void get_shard_load(zl_loop_t *loop, void *udata);
+static void update_total_load(zl_loop_t *loop, void *udata);
 
-void start_rtz_shards()
+void start_rtz_shards(zl_loop_t *control_loop)
 {
+    rtz_control_loop = control_loop;
     int i;
     for (i = 0; i < RTZ_SHARDS; ++i) {
         rtz_shards[i] = shard_new(i);
@@ -63,6 +69,17 @@ zl_loop_t *rtz_shard_get_loop(int idx)
         && rtz_shards[idx])
         return rtz_shards[idx]->loop;
     return NULL;
+}
+
+zl_loop_t *rtz_shard_get_control_loop()
+{
+    return rtz_control_loop;
+}
+
+int rtz_get_total_load()
+{
+    zl_invoke(rtz_shards[0]->loop, get_shard_load, 0);
+    return rtz_total_load;
 }
 
 rtz_shard_t *shard_new(int idx)
@@ -101,7 +118,7 @@ void *shard_entry(void *arg)
     rtz_server_start(d->rtz_srv);
 
     while (!zl_loop_stopped(d->loop)) {
-        zl_poll(d->loop, 100);
+        zl_poll(d->loop, 1000);
     }
 
     LLOG(LL_INFO, "shard %d stopping...", d->idx);
@@ -139,4 +156,37 @@ void after_stop_shard(zl_loop_t *loop, void *udata)
         ret = pthread_tryjoin_np(d->tid, NULL);
     }
     free(d);
+}
+
+void get_shard_load(zl_loop_t *loop, void *udata)
+{
+    rtz_shard_t *cur_shard = rtz_shards[rtz_shard_index_ct];
+    cur_shard->load = rtz_get_load(cur_shard->rtz_srv);
+
+    intptr_t total_load = (intptr_t)udata;
+    total_load += cur_shard->load;
+
+    int next_idx = rtz_shard_index_ct + 1;
+    if (next_idx < RTZ_SHARDS) {
+        zl_invoke(rtz_shards[next_idx]->loop, get_shard_load, (void*)total_load);
+    } else {
+        zl_invoke(rtz_control_loop, update_total_load, (void*)total_load);
+    }
+}
+
+void update_total_load(zl_loop_t *loop, void *udata)
+{
+    rtz_total_load = (intptr_t)udata;
+
+    char text[1024];
+    char *p = text;
+    const char *pend = text + sizeof(text);
+    p += snprintf(p, pend - p, "%4d", rtz_shards[0]->load);
+    int i;
+    for (i = 1; i < RTZ_SHARDS; ++i) {
+        p += snprintf(p, pend - p, ",%4d", rtz_shards[i]->load);
+    }
+    if (RTZ_SHARDS > 1)
+        p += snprintf(p, pend - p, " total=%d", rtz_total_load);
+    LLOG(LL_TRACE, "shard_loads=%s", text);
 }

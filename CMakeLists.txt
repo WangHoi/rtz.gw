@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.10)
 project(rtz.gw C ASM)
 set(rtzgw_VERSION "0.1.1")
 
@@ -47,15 +47,11 @@ set(rtz_SRCS
     src/media/rtp_demux.c
     src/media/rtp_mux.c
 	src/net/net_util.c
-#    src/net/rtsp_client.c
     src/net/nbuf.c
     src/net/tcp_chan.c
-    src/net/udp_chan.c
     src/net/rtmp_types.c
     src/net/rtmp_handshake.c
-    src/net/rtmp_server.c
     src/net/rtmp_client.c
-    src/net/monitor_server.c
     src/net/http_types.c
     src/net/rtz_server.c
     src/net/stun.c
@@ -160,7 +156,6 @@ set(rtz_bench_SRCS
 	src/net/net_util.c
     src/net/nbuf.c
     src/net/tcp_chan.c
-    src/net/udp_chan.c
     src/net/http_types.c
     src/net/stun.c
     src/net/rtp.c

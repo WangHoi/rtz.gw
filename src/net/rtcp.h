@@ -109,7 +109,7 @@ typedef struct rtcp_nack
 	uint16_t blp;
 } rtcp_nack;
 
-/** Janus representation (linked list) of sequence numbers to send again */
+/** Representation (linked list) of sequence numbers to send again */
 typedef struct rtz_nack {
 	/** Sequence number to send again */
 	uint16_t seq_no;
@@ -247,12 +247,12 @@ typedef struct rtcp_transport_wide_cc_stats
 uint32_t rtcp_context_get_rtt(rtcp_context *ctx);
 /** Method to retrieve the total number of lost packets from an existing RTCP context
  * @param[in] ctx The RTCP context to query
- * @param[in] remote Whether we're querying the remote (provided by peer) or local (computed by Janus) info
+ * @param[in] remote Whether we're querying the remote (provided by peer) or local (computed by Server) info
  * @returns The total number of lost packets */
 uint32_t rtcp_context_get_lost_all(rtcp_context *ctx, int remote);
 /** Method to retrieve the jitter from an existing RTCP context
  * @param[in] ctx The RTCP context to query
- * @param[in] remote Whether we're querying the remote (provided by peer) or local (computed by Janus) info
+ * @param[in] remote Whether we're querying the remote (provided by peer) or local (computed by Server) info
  * @returns The computed jitter */
 uint32_t rtcp_context_get_jitter(rtcp_context *ctx, int remote);
 /** Method to retrieve inbound link quality from an existing RTCP context

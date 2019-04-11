@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <openssl/opensslv.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
@@ -15,7 +15,7 @@ BIO *BIO_dtls_agent_new(struct dtls_srtp *dtls);
  *
  * The default starting MTU is 1472, in case fragmentation is needed
  * the OpenSSL DTLS stack automatically decreases it. That said, if
- * you know for sure the MTU in the network Janus is deployed in is
+ * you know for sure the MTU in the network Server is deployed in is
  * smaller than that, it makes sense to configure an according value to
  * start from.
  *

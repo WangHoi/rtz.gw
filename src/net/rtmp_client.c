@@ -14,7 +14,6 @@
 #include "tcp_chan.h"
 #include "timestamp.h"
 #include "rtz_server.h"
-#include "rtmp_server.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>

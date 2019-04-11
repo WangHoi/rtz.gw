@@ -3,7 +3,7 @@
 #include "sbuf.h"
 #include "event_loop.h"
 #include "log.h"
-#include "net/rtz_server.h"
+#include "rtz_shard.h"
 #include <zookeeper/zookeeper.h>
 #include <unistd.h>
 #include <string.h>
@@ -48,8 +48,6 @@ extern int RTMP_PUBLIC_PORT;
 extern int RTMP_LOCAL_PORT;
 extern const char *ORIGIN_HOST;
 
-extern rtz_server_t *g_rtz_srv;
-
 static zl_loop_t *zloop = NULL;
 static zhandle_t *handle = NULL;
 static volatile int connected = 0;
@@ -78,18 +76,11 @@ void start_zk_registry(zl_loop_t *loop)
     zloop = loop;
     rtz_real_path = sbuf_new();
     handle = zookeeper_init2(ZK_HOST, &zk_watch, RECV_TIMEOUT_MSECS, NULL, (void*)&connected, 0, zk_log_handler);
-    int edge = (ORIGIN_HOST != NULL);
-    if (edge) {
-        snprintf(rtz_edge_service_name, sizeof(rtz_edge_service_name),
-                 "%s%s/rtz/", RTZ_EDGE_SERVICE_NAME_PREFIX, ORIGIN_HOST);
-        zk_mkdir(handle, rtz_edge_service_name, rtz_real_path,
-                 RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT,
-                 RTZ_LOCAL_IP, RTMP_LOCAL_PORT);
-    } else {
-        zk_mkdir(handle, RTZ_ORIGIN_SERVICE_NAME, rtz_real_path,
-                 RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT,
-                 RTZ_LOCAL_IP, RTMP_LOCAL_PORT);
-    }
+    snprintf(rtz_edge_service_name, sizeof(rtz_edge_service_name),
+                "%s%s/rtz/", RTZ_EDGE_SERVICE_NAME_PREFIX, ORIGIN_HOST);
+    zk_mkdir(handle, rtz_edge_service_name, rtz_real_path,
+                RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT,
+                RTZ_LOCAL_IP, RTMP_LOCAL_PORT);
     ztimer = zl_timer_start(loop, UPDATE_TIMEOUT_MSECS, UPDATE_TIMEOUT_MSECS, zk_timeout_handler, NULL);
 }
 
@@ -132,15 +123,9 @@ void zk_mkdir(zhandle_t *handle, const char *service_name, sbuf_t *real_path,
     }
     char realpath[1024] = { 0 };
     char text[1024];
-    if (ORIGIN_HOST) {
-        snprintf(text, sizeof(text), "{\"public_host\": \"%s:%d\",\"local_host\": \"%s:%d\","
-                 " \"origin_host\":\"%s\", \"mode\":2, \"load\": %d}",
-                 public_ip, public_port, local_ip, local_port, ORIGIN_HOST, 0);
-    } else {
-        snprintf(text, sizeof(text), "{\"public_host\": \"%s:%d\",\"local_host\": \"%s:%d\","
-                 " \"origin_host\":\"%s:%d\", \"mode\":1, \"load\": %d}",
-                 public_ip, public_port, local_ip, local_port, local_ip, local_port, 0);
-    }
+    snprintf(text, sizeof(text), "{\"public_host\": \"%s:%d\",\"local_host\": \"%s:%d\","
+                " \"origin_host\":\"%s\", \"mode\":2, \"load\": %d}",
+                public_ip, public_port, local_ip, local_port, ORIGIN_HOST, 0);
     ret = zoo_create(handle, service_name, text, strlen(text), &ZOO_OPEN_ACL_UNSAFE,
                      ZOO_EPHEMERAL | ZOO_SEQUENCE, realpath, sizeof(realpath) - 1);
     if (ret == ZOK) {
@@ -174,15 +159,9 @@ void zk_update(zhandle_t *handle, const char *real_path,
                const char *local_ip, int local_port)
 {
     char text[1024];
-    if (ORIGIN_HOST) {
-        snprintf(text, sizeof(text), "{\"public_host\": \"%s:%d\",\"local_host\": \"%s:%d\","
-                 " \"origin_host\":\"%s\", \"mode\":2, \"load\": %d}",
-                 public_ip, public_port, local_ip, local_port, ORIGIN_HOST, rtz_get_load(g_rtz_srv));
-    } else {
-        snprintf(text, sizeof(text), "{\"public_host\": \"%s:%d\",\"local_host\": \"%s:%d\","
-                 " \"origin_host\":\"%s:%d\", \"mode\":1, \"load\": %d}",
-                 public_ip, public_port, local_ip, local_port, local_ip, local_port, rtz_get_load(g_rtz_srv));
-    }
+    snprintf(text, sizeof(text), "{\"public_host\": \"%s:%d\",\"local_host\": \"%s:%d\","
+                " \"origin_host\":\"%s\", \"mode\":2, \"load\": %d}",
+                public_ip, public_port, local_ip, local_port, ORIGIN_HOST, rtz_get_total_load());
     int ret = zoo_set(handle, real_path, text, strlen(text), -1);
     if (ret != ZOK) {
         LLOG(LL_ERROR, "zoo_set error %d", ret);

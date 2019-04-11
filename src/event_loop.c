@@ -8,9 +8,10 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
-#include <sys/timerfd.h>
+#include <sys/eventfd.h>
 #include <assert.h>
 #include <limits.h>
+#include <time.h>
 
 enum {
     ZL_JOB_QUEUE_DEFAULT_SIZE_ORDER = 20,
@@ -19,7 +20,6 @@ enum {
 struct fd_event {
     uint32_t events;
     zl_fd_event_cb func;
-    zl_timerfd_event_cb timer_func;
     void *udata;
 };
 
@@ -52,6 +52,7 @@ struct zl_loop_t {
     struct epoll_event *eevents;
     struct fd_event *fds;
     int epoll_fd;
+    int evt_fd;
     int stop;
     int eevents_cnt;
     int setsize;
@@ -64,12 +65,12 @@ struct zl_loop_t {
 
 static __thread zl_loop_t *ct_loop = NULL;
 
-static void timerfd_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata);
 static int run_defer_funcs(zl_loop_t *loop);
 static int run_jobs(zl_loop_t *loop);
 static int run_timers(zl_loop_t *loop, int *first_timeout);
 static int new_timer_id(zl_loop_t *loop);
 static struct timer_event *find_timer(zl_loop_t *loop, int id);
+static void loop_evtfd_event_cb(zl_loop_t *loop, int fd, uint32_t events, void *udata);
 
 zl_loop_t *zl_loop_new(int setsize)
 {
@@ -99,6 +100,9 @@ zl_loop_t *zl_loop_new(int setsize)
     loop->job_queue = mpsc_queue_new(ZL_JOB_QUEUE_DEFAULT_SIZE_ORDER);
     INIT_LIST_HEAD(&loop->stage_job_list);
     INIT_LIST_HEAD(&loop->timer_list);
+
+    loop->evt_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    zl_fd_ctl(loop, EPOLL_CTL_ADD, loop->evt_fd, EPOLLIN, loop_evtfd_event_cb, loop);
     return loop;
 err_epfd:
     free(loop->fds);
@@ -114,6 +118,8 @@ void zl_loop_del(zl_loop_t *loop)
     if (!loop)
         return;
 
+    zl_fd_ctl(loop, EPOLL_CTL_DEL, loop->evt_fd, 0, NULL, NULL);
+    close(loop->evt_fd);
     mpsc_queue_del(loop->job_queue);
     close(loop->epoll_fd);
     free(loop->eevents);
@@ -135,12 +141,10 @@ int zl_poll(zl_loop_t *loop, int timeout)
 {
     int ret, i, ne = 0;
     long long ts1 = zl_time();
-    //LLOG(LL_TRACE, "poll enter");
     ne += run_timers(loop, &timeout);
-    if (!list_empty(&loop->defer_list) || !list_empty(&loop->stage_job_list)
-        || mpsc_peek(loop->job_queue)) {
+    if (!list_empty(&loop->stage_job_list))
         timeout = 0;
-    }
+
     long long ts2 = zl_time();
     ret = epoll_wait(loop->epoll_fd, loop->eevents, loop->setsize, timeout);
     long long ts3 = zl_time();
@@ -218,6 +222,8 @@ void zl_defer(zl_loop_t *loop, zl_defer_cb func, int64_t status, void *udata)
     defer->status = status;
     defer->udata = udata;
     list_add_tail(&defer->link, &loop->defer_list);
+    const int64_t d = 1;
+    UNUSED(write(loop->evt_fd, &d, 8));
 }
 
 int run_defer_funcs(zl_loop_t *loop)
@@ -286,6 +292,8 @@ void zl_invoke2(zl_loop_t *loop, zl_job_cb cb, zl_job_cb after_cb, void *udata)
     je->after_cb = after_cb;
     je->udata = udata;
     list_add_tail(&je->link, &ct_loop->stage_job_list);
+    const int64_t d = 1;
+    UNUSED(write(loop->evt_fd, &d, sizeof(d)));
 }
 
 int zl_timer_start(zl_loop_t *loop, long delay, long repeat, zl_timer_cb func, void *udata)
@@ -374,4 +382,10 @@ int run_timers(zl_loop_t *loop, int *first_timeout)
             *first_timeout = MIN(*first_timeout, t->deadline - now);
     }
     return n;
+}
+
+void loop_evtfd_event_cb(zl_loop_t *loop, int fd, uint32_t events, void *udata)
+{
+    int64_t d = 1;
+    UNUSED(read(fd, &d, 8));
 }

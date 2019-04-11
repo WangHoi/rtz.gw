@@ -329,8 +329,8 @@ dtls_srtp *dtls_srtp_create(void *ice_component, dtls_role role)
     if (ecdh == NULL) {
         LLOG(LL_ERROR, "Error creating ECDH group! (%s)",
              ERR_reason_error_string(ERR_get_error()));
-        //janus_refcount_decrease(&dtls->ref);
-        // free dtls
+        SSL_free(dtls->ssl);
+        free(dtls);
         return NULL;
     }
     const long flags = SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_COMPRESSION | SSL_OP_SINGLE_ECDH_USE;
@@ -416,7 +416,7 @@ void dtls_srtp_incoming_msg(dtls_srtp *dtls, char *buf, uint16_t len)
             return;
         }
     }
-    if (ice_flags_is_set(handle, ICE_HANDLE_WEBRTC_STOP)/* || janus_is_stopping()*/) {
+    if (ice_flags_is_set(handle, ICE_HANDLE_WEBRTC_STOP)) {
         /* DTLS alert triggered, we should end it here */
         LLOG(LL_TRACE, "Forced to stop it here...");
         return;
@@ -682,55 +682,6 @@ int dtls_retry(void *stack)
 {
     LLOG(LL_WARN, "dtls_retry not implemented!");
     return 0;
-#if 0
-    dtls_srtp *dtls = (dtls_srtp *)stack;
-    if (dtls == NULL)
-        return 0;
-    ice_component_t *component = (ice_component_t *)dtls->component;
-    if (component == NULL)
-        return 0;
-    ice_stream_t *stream = component->stream;
-    if (!stream)
-        goto stoptimer;
-
-    janus_ice_handle *handle = stream->handle;
-    if (!handle)
-        goto stoptimer;
-    if (janus_flags_is_set(&handle->webrtc_flags, JANUS_ICE_HANDLE_WEBRTC_STOP))
-        goto stoptimer;
-    if (dtls->dtls_state == DTLS_STATE_CONNECTED) {
-        LLOG(LL_TRACE, "DTLS already set up, disabling retransmission timer!");
-        goto stoptimer;
-    }
-    if (zl_hrtime() - dtls->dtls_started >= 20 * ZL_USEC_PER_SEC) {
-        /* FIXME Should we really give up after 20 seconds waiting for DTLS? */
-        LLOG(LL_ERROR, "DTLS taking too much time for component in stream...");
-        ice_webrtc_hangup(handle, "DTLS timeout");
-        goto stoptimer;
-    }
-    struct timeval timeout = { 0 };
-    if (DTLSv1_get_timeout(dtls->ssl, &timeout) == 0) {
-        /* failed to get timeout. try again on next iter */
-        return 1;
-    }
-    uint64_t timeout_value = timeout.tv_sec * 1000 + timeout.tv_usec / 1000;
-    LLOG(LL_TRACE, "DTLSv1_get_timeout: %"SCNu64"\n", timeout_value);
-    if (timeout_value == 0) {
-        dtls->retransmissions++;
-        LLOG(LOG_VERB, "[%"SCNu64"] DTLS timeout on component %d of stream %d, retransmitting\n", handle->handle_id, component->component_id, stream->stream_id);
-        /* Retransmit the packet */
-        DTLSv1_handle_timeout(dtls->ssl);
-    }
-    return 1;
-
-stoptimer:
-    if (component->dtlsrt_source != NULL) {
-        g_source_destroy(component->dtlsrt_source);
-        g_source_unref(component->dtlsrt_source);
-        component->dtlsrt_source = NULL;
-    }
-    return 0;
-#endif
 }
 
 const char *get_dtls_srtp_state(dtls_state state)

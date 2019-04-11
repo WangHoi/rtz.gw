@@ -12,7 +12,6 @@
 #include "macro_util.h"
 #include "net/tcp_chan.h"
 #include "net/tcp_chan_ssl.h"
-#include "net/udp_chan.h"
 #include "net/http_hooks.h"
 #include "algo/sha1.h"
 #include "ice.h"
@@ -20,7 +19,6 @@
 #include "media/rtp_mux.h"
 #include "apierror.h"
 #include "rtmp_client.h"
-#include "rtmp_server.h"
 #include "rtz_shard.h"
 #include <time.h>
 #include <sys/types.h>
@@ -262,17 +260,7 @@ void rtz_server_stop(rtz_server_t *srv)
     }
     rtz_stream_t *stream, *stream_tmp;
     list_for_each_entry_safe(stream, stream_tmp, &srv->stream_list, link) {
-        if (ORIGIN_HOST) { /* edge mode */
-            rtz_stream_del(stream);
-        } else {
-            if (stream->rtmp_peer) {
-                /* Calling rtmp_peer_del() will del rtz_stream_t */
-                rtmp_peer_del(stream->rtmp_peer);
-                stream->rtmp_peer = NULL;
-            } else {
-                rtz_stream_del(stream);
-            }
-        }
+        rtz_stream_del(stream);
     }
 }
 
@@ -770,7 +758,7 @@ void create_handle(http_peer_t *peer, const char *transaction, const char *sessi
         LLOG(LL_INFO, "handle %p join stream %p(%s)",
              handle, handle->stream, handle->stream_name->data);
         list_add(&handle->stream_link, &handle->stream->handle_list);
-    } else if (ORIGIN_HOST) {
+    } else {
         handle->stream = rtz_stream_new(peer->srv, handle->stream_name->data);
         rtmp_client_t *client = rtmp_client_new(peer->srv->loop);
 
@@ -781,9 +769,7 @@ void create_handle(http_peer_t *peer, const char *transaction, const char *sessi
         if (p)
             sbuf_append1(origin_url, p);
 
-        //sbuf_append1(origin_url, "|edge=1/");
-        sbuf_append1(origin_url, "/");
-
+        sbuf_append1(origin_url, "|edge=1/");
         sbuf_append(origin_url, handle->stream_name);
 
         LLOG(LL_DEBUG, "handle %p pull new stream %p(%s) origin='%s'",
@@ -1410,29 +1396,14 @@ cJSON *make_streaming_event(rtz_handle_t *handle, const char *ename, cJSON **pre
 void rtz_server_cron(zl_loop_t *loop, int timerid, void *udata)
 {
     rtz_server_t *srv = udata;
-    int edge = (ORIGIN_HOST != NULL);
     rtz_stream_t *stream, *tmp;
     long long now = zl_time();
     list_for_each_entry_safe(stream, tmp, &srv->stream_list, link) {
         long long expire_timeout = RTZ_NO_VIDEO_TIMEOUT_MSECS + lrand48() % 1000;
-        if (edge) {
-            if (now > stream->last_out_time + expire_timeout) {
-                LLOG(LL_ERROR, "rtz_stream_t %p(%s) edge_timeout %lld ms", stream,
-                     stream->stream_name->data, now - stream->last_out_time);
-                rtz_stream_del(stream);
-            }
-        } else {
-            if (now > stream->last_in_time + expire_timeout) {
-                LLOG(LL_ERROR, "rtz_stream_t %p(%s) origin_timeout %lld ms", stream,
-                     stream->stream_name->data, now - stream->last_in_time);
-                if (stream->rtmp_peer) {
-                    /* Calling rtmp_peer_del() will del rtz_stream_t */
-                    rtmp_peer_del(stream->rtmp_peer);
-                    stream->rtmp_peer = NULL;
-                } else {
-                    rtz_stream_del(stream);
-                }
-            }
+        if (now > stream->last_out_time + expire_timeout) {
+            LLOG(LL_ERROR, "rtz_stream_t %p(%s) timeout %lld ms", stream,
+                    stream->stream_name->data, now - stream->last_out_time);
+            rtz_stream_del(stream);
         }
     }
 }
