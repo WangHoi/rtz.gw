@@ -3,6 +3,7 @@
 #include "event_loop.h"
 #include "macro_util.h"
 #include "log.h"
+#include "sched_util.h"
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -107,7 +108,14 @@ void rtz_shard_del(rtz_shard_t *d)
 void *shard_entry(void *arg)
 {
     rtz_shard_t *d = arg;
-    LLOG(LL_INFO, "shard %d starting...", d->idx);
+
+    const int cpu_count = get_cpu_count();
+    set_cpu_scheduler_fifo_ct();
+    int cpu_core = (RTZ_SHARDS < cpu_count)
+        ? cpu_count - RTZ_SHARDS + d->idx
+        : d->idx % cpu_count;
+    set_cpu_affinity_ct(cpu_core);
+    LLOG(LL_INFO, "starting shard %d on core %d...", d->idx, cpu_core);
 
     rtz_shard_index_ct = d->idx;
     d->loop = zl_loop_new(4096);
