@@ -111,12 +111,14 @@ void *shard_entry(void *arg)
     rtz_shard_t *d = arg;
 
     const int cpu_count = get_cpu_count();
-    set_cpu_scheduler_fifo_ct();
-    int cpu_core = (RTZ_SHARDS < cpu_count)
-        ? cpu_count - RTZ_SHARDS + d->idx
-        : d->idx % cpu_count;
-    set_cpu_affinity_ct(cpu_core);
-    LLOG(LL_INFO, "starting shard %d on core %d...", d->idx, cpu_core);
+    if (cpu_count > 1) {
+        set_cpu_scheduler_fifo_ct();
+        int cpu_core = (RTZ_SHARDS < cpu_count)
+            ? (1 + d->idx) % (cpu_count - 1)
+            : d->idx % cpu_count;
+        set_cpu_affinity_ct(cpu_core);
+        LLOG(LL_INFO, "starting shard %d on core %d...", d->idx, cpu_core);
+    }
 
     rtz_shard_index_ct = d->idx;
     d->loop = zl_loop_new(4096);
