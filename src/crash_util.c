@@ -14,15 +14,23 @@
 #include <errno.h>
 
 #define	BACKTRACE_DEPTH	256
-#define	NULLSTR	"<NULL>"
+#define	NULLSTR	"(null)"
+
+static char msg_text[65536];
+static int msg_len = 0;
 
 static inline void print_str(const char *str)
 {
+    int n;
+    char *tail = msg_text + msg_len;
     if (str == NULL) {
-        llog_raw(NULLSTR, 0);
+        n = strlen(NULLSTR);
+        memcpy(tail, NULLSTR, n);
     } else {
-        llog_raw(str, 0);
+        n = strlen(str);
+        memcpy(tail, str, n);
     }
+    msg_len += n;
 }
 
 static void print_unw_error(const char *fun, int error)
@@ -110,6 +118,8 @@ static void segfault_handler(int sig, siginfo_t *info, void *ctx)
     print_str("\n");
 
     print_stack_trace(uap);
+    msg_text[msg_len++] = 0;
+    llog_raw(msg_text, 0);
     llog_flush();
 
     /*

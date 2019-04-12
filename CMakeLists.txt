@@ -22,7 +22,6 @@ option(WITH_ASAN "enable address sanitizer" OFF)
 option(WITH_TCMALLOC "link with tcmalloc" OFF)
 option(WITH_ZOOKEEPER "enable zookeeper integration" OFF)
 
-find_package(PkgConfig)
 if(PkgConfig_FOUND)
     pkg_check_modules(SYSTEMD libsystemd)
 endif()
