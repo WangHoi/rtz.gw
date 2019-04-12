@@ -180,6 +180,11 @@ struct ice_agent_t {
     struct list_head link;
 };
 
+struct ice_tcp_chan_udata {
+    ice_server_t *srv;
+    ice_agent_t *agent;
+};
+
 static ice_stream_t *ice_stream_new(ice_agent_t *handle);
 static void ice_stream_del(ice_stream_t *stream);
 static ice_component_t *ice_component_new(ice_stream_t *stream);
@@ -204,7 +209,7 @@ static void ice_tcp_accept_handler(tcp_srv_t *tcp_srv, tcp_chan_t *chan, void *u
 static void ice_tcp_data_handler(tcp_chan_t *chan, void *udata);
 static void ice_tcp_sent_handler(tcp_chan_t *chan, void *udata);
 static void ice_tcp_error_handler(tcp_chan_t *chan, int status, void *udata);
-static void ice_tcp_error_cleanup(tcp_chan_t *chan, ice_server_t *srv);
+static void ice_tcp_error_cleanup(tcp_chan_t *chan, struct ice_tcp_chan_udata *udata);
 
 static void ice_send(ice_agent_t *agent, int type, const void *data, int size);
 static void update_stats(ice_component_t *component, ice_queued_packet_t *pkt);
@@ -238,7 +243,10 @@ void ice_server_bind(ice_server_t *srv, const char *ip, unsigned short port)
 void ice_tcp_accept_handler(tcp_srv_t *tcp_srv, tcp_chan_t *chan, void *udata)
 {
     ice_server_t *srv = udata;
-    tcp_chan_set_cb(chan, ice_tcp_data_handler, ice_tcp_sent_handler, ice_tcp_error_handler, srv);
+    struct ice_tcp_chan_udata *chan_udata = malloc(sizeof(struct ice_tcp_chan_udata));
+    memset(chan_udata, 0, sizeof(struct ice_tcp_chan_udata));
+    chan_udata->srv = srv;
+    tcp_chan_set_cb(chan, ice_tcp_data_handler, ice_tcp_sent_handler, ice_tcp_error_handler, chan_udata);
     /* typical minimum buffer size: 4608 */
     set_socket_send_buf_size(tcp_chan_fd(chan), 0/*16384*/);
     int ret = set_ip_tos(tcp_chan_fd(chan), DSCP_CLASS_EF); /* EF class */
@@ -276,7 +284,7 @@ void ice_agent_del(ice_agent_t *agent)
     LLOG(LL_TRACE, "release agent %p handle %p luser='%s'", agent,
          agent->rtz_handle, agent->stream->luser->data);
     if (agent->peer_tcp)
-        ice_tcp_error_cleanup(agent->peer_tcp, agent->srv);
+        ice_tcp_error_cleanup(agent->peer_tcp, tcp_chan_get_userdata(agent->peer_tcp));
     ice_webrtc_hangup(agent, "Delete ICE Agent");
     ice_flags_set(agent, ICE_HANDLE_WEBRTC_STOP);
     ice_stream_del(agent->stream);
@@ -469,6 +477,8 @@ void stun_handler(ice_server_t *srv, const void *data, int size,
         sbuf_strcpy(agent->stream->ruser, ufrag2);
         memcpy(&agent->peer_addr, addr, addrlen);
         agent->peer_tcp = tcp_chan;
+        struct ice_tcp_chan_udata *chan_udata = tcp_chan_get_userdata(tcp_chan);
+        chan_udata->agent = agent;
         if (stun_msg_find_attr(msg_hdr, STUN_ATTR_USE_CANDIDATE))
             agent->cand_state = ICE_CAND_STATE_NOMINATED;
         else
@@ -701,7 +711,7 @@ int ice_component_send(ice_component_t *component, const void *data, int size)
         if (tcp_chan_get_write_buf_size(agent->peer_tcp) > ICE_MAX_TCP_WRITE_BUF_SIZE) {
             LLOG(LL_ERROR, "rtz_handle %p ice_agent %p slow connection, abort stun-tcp channel.",
                  agent->rtz_handle, agent);
-            ice_tcp_error_cleanup(agent->peer_tcp, agent->srv);
+            ice_tcp_error_cleanup(agent->peer_tcp, tcp_chan_get_userdata(agent->peer_tcp));
             return -1;
         }
         uint8_t frame_hdr[2];
@@ -711,6 +721,7 @@ int ice_component_send(ice_component_t *component, const void *data, int size)
         tcp_chan_write(agent->peer_tcp, data, size);
         return size;
     }
+    return -1;
 }
 
 ice_agent_t *ice_stream_get_agent(ice_stream_t *stream)
@@ -1030,10 +1041,10 @@ void rtcp_timeout_handler(zl_loop_t *loop, int id, void *udata)
 #endif
 }
 
-void ice_tcp_error_cleanup(tcp_chan_t *chan, ice_server_t *srv)
+void ice_tcp_error_cleanup(tcp_chan_t *chan, struct ice_tcp_chan_udata *chan_udata)
 {
     ice_agent_t *agent;
-    list_for_each_entry(agent, &srv->agent_list, link) {
+    list_for_each_entry(agent, &chan_udata->srv->agent_list, link) {
         if (agent->peer_tcp == chan) {
             agent->peer_tcp = NULL;
             agent->cand_state = ICE_CAND_STATE_EMPTY;
@@ -1041,6 +1052,7 @@ void ice_tcp_error_cleanup(tcp_chan_t *chan, ice_server_t *srv)
             //ice_webrtc_hangup(agent, "TcpSocket Error");
         }
     }
+    free(chan_udata);
     tcp_chan_close(chan, 0);
 }
 
@@ -1088,12 +1100,14 @@ static void move_tcp_chan(zl_loop_t *loop, void *udata)
     rtz_server_t *srv = rtz_shard_get_server_ct();
     //LLOG(LL_TRACE, "tcp_chan %p moved", chan);
     tcp_chan_set_usertag(chan, 1);
-    tcp_chan_attach(chan, loop, rtz_get_ice_server(srv));
+    struct ice_tcp_chan_udata *chan_udata = tcp_chan_get_userdata(chan);
+    chan_udata->srv = rtz_get_ice_server(srv);
+    tcp_chan_attach(chan, loop);
 }
 
 void ice_tcp_data_handler(tcp_chan_t *chan, void *udata)
 {
-    ice_server_t *srv = udata;
+    struct ice_tcp_chan_udata *chan_udata = udata;
     uint8_t data[2 + ICE_MAX_TCP_FRAME_SIZE];
     int qlen = tcp_chan_get_read_buf_size(chan);
     int size;
@@ -1115,6 +1129,7 @@ void ice_tcp_data_handler(tcp_chan_t *chan, void *udata)
                     assert(expect_shard != -1);
                     if (cur_shard != expect_shard) {
                         tcp_chan_detach(chan);
+                        chan_udata->srv = NULL;
                         zl_loop_t *expect_loop = rtz_shard_get_loop(expect_shard);
                         if (expect_loop)
                             zl_invoke(expect_loop, move_tcp_chan, chan);
@@ -1131,13 +1146,12 @@ void ice_tcp_data_handler(tcp_chan_t *chan, void *udata)
     struct sockaddr *addr = (struct sockaddr*)&addr_in;
     int addrlen = sizeof(struct sockaddr_in);
     tcp_chan_get_peername(chan, addr, addrlen);
-    ice_agent_t *agent = find_agent_by_address(srv, addr, addrlen, 1);
 
     while (qlen >= 2) {
         tcp_chan_peek(chan, data, 2);
         size = (data[0] << 8) | data[1];
         if (size > ICE_MAX_TCP_FRAME_SIZE) {
-            ice_tcp_error_cleanup(chan, srv);
+            ice_tcp_error_cleanup(chan, chan_udata);
             break;
         }
         if (qlen >= 2 + size) {
@@ -1145,20 +1159,18 @@ void ice_tcp_data_handler(tcp_chan_t *chan, void *udata)
             enum ice_payload_type type = ice_get_payload_type(data + 2, size);
             //LLOG(LL_DEBUG, "pkt type %d size %d data=%02hhx%02hhx", type, size, ((uint8_t*)data)[2], ((uint8_t*)data)[3]);
             if (type == ICE_PAYLOAD_STUN) {
-                stun_handler(srv, data + 2, size, addr, addrlen, chan);
+                stun_handler(chan_udata->srv, data + 2, size, addr, addrlen, chan);
             } else if (type == ICE_PAYLOAD_DTLS) {
-                if (!agent)
-                    agent = find_agent_by_address(srv, addr, addrlen, 1);
-                dtls_handler(agent, data + 2, size, addr, addrlen);
+                dtls_handler(chan_udata->agent, data + 2, size, addr, addrlen);
             } else if (type == ICE_PAYLOAD_RTP) {
-                srtp_handler(agent, data + 2, size);
+                srtp_handler(chan_udata->agent, data + 2, size);
             } else if (type == ICE_PAYLOAD_RTCP) {
-                srtcp_handler(agent, data + 2, size);
+                srtcp_handler(chan_udata->agent, data + 2, size);
             } else {
                 LLOG(LL_WARN, "unhandled muxed payload type=%d", type);
             }
-            if (agent)
-                rtz_update_stats(agent->rtz_handle, 2 + size, 0);
+            if (chan_udata->agent)
+                rtz_update_stats(chan_udata->agent->rtz_handle, 2 + size, 0);
         } else {
             break;
         }
@@ -1172,12 +1184,13 @@ void ice_tcp_sent_handler(tcp_chan_t *chan, void *udata)
     if (qlen > 0)
         return;
 
-    ice_server_t *srv = udata;
-    struct sockaddr_in addr_in;
-    struct sockaddr *addr = (struct sockaddr*)&addr_in;
-    int addrlen = sizeof(struct sockaddr_in);
-    tcp_chan_get_peername(chan, addr, addrlen);
-    ice_agent_t *agent = find_agent_by_address(srv, addr, addrlen, 1);
+    struct ice_tcp_chan_udata *chan_udata = udata;
+    ice_agent_t *agent = chan_udata->agent;
+    //struct sockaddr_in addr_in;
+    //struct sockaddr *addr = (struct sockaddr*)&addr_in;
+    //int addrlen = sizeof(struct sockaddr_in);
+    //tcp_chan_get_peername(chan, addr, addrlen);
+    //ice_agent_t *agent = find_agent_by_address(chan_udata->srv, addr, addrlen, 1);
     if (!agent)
         return;
 

@@ -108,6 +108,7 @@ again:
     }
     //LLOG(LL_TRACE, "new fd %d", chan->fd);
     set_tcp_nodelay(chan->fd, 1);
+    set_socket_send_buf_size(chan->fd, 8192);
     chan->rcv_buf = nbuf_new1(TCP_CHAN_RCV_BUF_SIZE);
     chan->snd_buf = nbuf_new1(TCP_CHAN_SND_BUF_SIZE);
     update_chan_events(chan);
@@ -211,6 +212,16 @@ int tcp_chan_get_peername(tcp_chan_t *chan, struct sockaddr *addr, int addrlen)
 int tcp_chan_fd(tcp_chan_t *chan)
 {
     return chan->fd;
+}
+
+void tcp_chan_set_userdata(tcp_chan_t *chan, void *udata)
+{
+    chan->udata = udata;
+}
+
+void *tcp_chan_get_userdata(tcp_chan_t *chan)
+{
+    return chan->udata;
 }
 
 void chan_fd_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata)
@@ -356,7 +367,7 @@ tcp_chan_t *tcp_connect(zl_loop_t *loop, const char *ip, unsigned port)
         goto err_out;
     //LLOG(LL_TRACE, "new fd %d", chan->fd);
     set_tcp_nodelay(chan->fd, 1);
-    set_socket_send_buf_size(chan->fd, 8192);
+    //set_socket_send_buf_size(chan->fd, 8192);
     chan->rcv_buf = nbuf_new1(TCP_CHAN_RCV_BUF_SIZE);
     chan->snd_buf = nbuf_new1(TCP_CHAN_SND_BUF_SIZE);
 
@@ -385,10 +396,9 @@ void tcp_chan_detach(tcp_chan_t *chan)
     WRITE_FENCE;
 }
 
-void tcp_chan_attach(tcp_chan_t *chan, zl_loop_t *loop, void *udata)
+void tcp_chan_attach(tcp_chan_t *chan, zl_loop_t *loop)
 {
     chan->loop = loop;
-    chan->udata = udata;
     if (chan->eevents)
         zl_fd_ctl(chan->loop, EPOLL_CTL_ADD, chan->fd, chan->eevents, chan_fd_event_handler, chan);
 

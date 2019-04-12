@@ -41,6 +41,7 @@ extern const char *RTZ_PUBLIC_IP;
 extern const char *ORIGIN_HOST;
 extern int RTZ_PUBLIC_MEDIA_PORT;
 extern int RTZ_LOCAL_MEDIA_PORT;
+extern const char *ZK_HOST;
 
 #define MAX_PLAYOUT_DELAY_FRAMES 50
 
@@ -768,15 +769,16 @@ void create_handle(http_peer_t *peer, const char *transaction, const char *sessi
         const char* p = strchr(handle->tc_url->data + 8, '/');
         if (p)
             sbuf_append1(origin_url, p);
-
-        sbuf_append1(origin_url, "|edge=1/");
+        if (ZK_HOST)
+            sbuf_append1(origin_url, "|edge=1/");
+        else
+            sbuf_appendc(origin_url, '/');
         sbuf_append(origin_url, handle->stream_name);
 
         LLOG(LL_DEBUG, "handle %p pull new stream %p(%s) origin='%s'",
              handle, handle->stream, handle->stream_name->data, origin_url->data);
 
         rtmp_client_set_uri(client, origin_url->data);
-        //rtmp_client_set_uri(client, "rtmp://172.16.3.103:19358/live/livestream_0");
         rtmp_client_tcp_connect(client, NULL);
         rtmp_client_set_rtz_stream(client, handle->stream);
         handle->stream->rtmp_client = client;
