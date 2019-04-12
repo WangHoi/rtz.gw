@@ -1,5 +1,6 @@
-﻿#include "rtz_shard.h"
+#include "rtz_shard.h"
 #include "net/rtz_server.h"
+#include "net/nbuf.h"
 #include "event_loop.h"
 #include "macro_util.h"
 #include "log.h"
@@ -121,6 +122,8 @@ void *shard_entry(void *arg)
     d->loop = zl_loop_new(4096);
     zl_loop_set_ct(d->loop);
 
+    nbuf_init_free_list_ct();
+
     d->rtz_srv = rtz_server_new(d->loop);
     rtz_server_bind(d->rtz_srv, RTZ_LOCAL_SIGNAL_PORT);
     rtz_server_start(d->rtz_srv);
@@ -139,6 +142,9 @@ void *shard_entry(void *arg)
 
     rtz_server_del(d->rtz_srv);
     d->rtz_srv = NULL;
+
+    nbuf_cleanup_free_list_ct();
+
     zl_loop_set_ct(NULL);
     zl_loop_del(d->loop);
     d->loop = NULL;

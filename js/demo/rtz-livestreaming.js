@@ -1,5 +1,6 @@
 //var server = 'ws://172.16.3.102:443/rtz';
-var server = 'ws://172.20.226.86:443/rtz';
+var server = 'ws://172.16.3.103:443/rtz';
+//var server = 'ws://172.20.226.86:443/rtz';
 //var server = 'ws://192.168.2.55:443/rtz';
 var rtzSession = null;
 

@@ -14,7 +14,7 @@ pkg_check_modules(LIBUNWIND REQUIRED libunwind-generic)
 
 add_subdirectory(3rdparty/cJSON-1.7.10)
 #add_subdirectory(3rdparty/libaco-1.2.4)
-add_subdirectory(3rdparty/mxml-2.12)
+#add_subdirectory(3rdparty/mxml-2.12)
 
 option(WITH_HTTP_HOOKS "enable http hooks" OFF)
 option(WITH_WSS "enable signal server WSS mode" OFF)
@@ -31,11 +31,12 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 #    ${aco_INCLUDE_DIRS}
     ${cJSON_INCLUDE_DIRS}
-    ${mxml_INCLUDE_DIRS}
+#    ${mxml_INCLUDE_DIRS}
     ${OPENSSL_INCLUDE_DIRS}
     ${LIBUNWIND_INCLUDE_DIRS}
     )
 add_definitions(-pthread -D_GNU_SOURCE -DTHREADED=1)
+#add_definitions(-fno-omit-frame-pointer -fkeep-inline-functions -fno-inline)
 set(CMAKE_C_LINK_FLAGS "${CMAKE_C_LINK_FLAGS} -no-pie")
 set(rtz_SRCS
 #    src/hook/aco_hook_syscall.c
@@ -79,6 +80,7 @@ set(rtz_SRCS
     src/watchdog.c
     src/zk_util.c
     src/rtz_shard.c
+    src/sched_util.c
 	)
 add_executable(rtz.gw ${rtz_SRCS})
 if(WITH_WSS)
@@ -110,7 +112,7 @@ endif()
 target_link_libraries(rtz.gw
 	${cJSON_LIBRARIES}
 #	${aco_LIBRARIES}
-    ${mxml_LIBRARIES}
+#    ${mxml_LIBRARIES}
     ${OPENSSL_LIBRARIES}
     ${srtp2_LIBRARY}
     ${LIBUNWIND_STATIC_LIBRARIES}
@@ -172,6 +174,7 @@ set(rtz_bench_SRCS
     src/algo/hmac_sha1.c
     src/algo/crc32.c
     src/timestamp.c
+    src/sched_util.c
 	)
 add_executable(rtz_bench ${rtz_bench_SRCS})
 if(WITH_ASAN)
@@ -184,7 +187,7 @@ endif()
 target_link_libraries(rtz_bench
 	${cJSON_LIBRARIES}
 #	${aco_LIBRARIES}
-    ${mxml_LIBRARIES}
+#    ${mxml_LIBRARIES}
     ${OPENSSL_LIBRARIES}
     ${srtp2_LIBRARY}
     ${LIBUNWIND_STATIC_LIBRARIES}

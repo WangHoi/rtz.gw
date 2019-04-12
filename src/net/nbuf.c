@@ -1,4 +1,4 @@
-﻿#include "nbuf.h"
+#include "nbuf.h"
 #include "list.h"
 #include "log.h"
 #include "macro_util.h"
@@ -24,6 +24,8 @@ struct nbuf_t {
     int chunk_capacity;
     struct list_head chunk_list;
 };
+
+static __thread struct list_head free_chunk_list = {};
 
 static struct nbuf_chunk *nbuf_chunk_new(nbuf_t *buf);
 static void nbuf_chunk_del(nbuf_t *buf, struct nbuf_chunk *c);
@@ -249,20 +251,31 @@ void nbuf_commit(nbuf_t *buf, int size)
 
 struct nbuf_chunk *nbuf_chunk_new(nbuf_t *buf)
 {
-    struct nbuf_chunk *c = malloc(sizeof(struct nbuf_chunk));
-    c->data = malloc(buf->chunk_capacity);
-    c->head = c->tail = 0;
+    struct nbuf_chunk *c;
+    if (!free_chunk_list.next || list_empty(&free_chunk_list)) {
+        c = malloc(sizeof(struct nbuf_chunk));
+        c->data = malloc(buf->chunk_capacity);
+        c->head = c->tail = 0;
+        list_add_tail(&c->link, &buf->chunk_list);
+    } else {
+        c = list_entry(free_chunk_list.next, struct nbuf_chunk, link);
+        list_move_tail(&c->link, &buf->chunk_list);
+    }
     ++buf->chunk_count;
-    list_add_tail(&c->link, &buf->chunk_list);
     return c;
 }
 
 void nbuf_chunk_del(nbuf_t *buf, struct nbuf_chunk *c)
 {
     --buf->chunk_count;
-    free(c->data);
-    list_del(&c->link);
-    free(c);
+    if (!free_chunk_list.next) {
+        free(c->data);
+        list_del(&c->link);
+        free(c);
+    } else {
+        c->head = c->tail = 0;
+        list_move(&c->link, &free_chunk_list);
+    }
 }
 
 struct nbuf_chunk *get_last_chunk(nbuf_t *buf)
@@ -279,4 +292,19 @@ struct nbuf_chunk *get_last_chunk(nbuf_t *buf)
             c = prev;
     }
     return c;
+}
+
+void nbuf_init_free_list_ct()
+{
+    INIT_LIST_HEAD(&free_chunk_list);
+}
+
+void nbuf_cleanup_free_list_ct()
+{
+    struct nbuf_chunk *c, *tmp;
+    list_for_each_entry_safe(c, tmp, &free_chunk_list, link) {
+        free(c->data);
+        free(c);
+    }
+    free_chunk_list.prev = free_chunk_list.next = NULL;
 }

@@ -1,4 +1,4 @@
-﻿#include "event_loop.h"
+#include "event_loop.h"
 #include "list.h"
 #include "mpsc_queue.h"
 #include "macro_util.h"
@@ -216,6 +216,7 @@ long long zl_time()
 
 void zl_defer(zl_loop_t *loop, zl_defer_cb func, int64_t status, void *udata)
 {
+    assert(func);
     struct defer_event *defer = malloc(sizeof(struct defer_event));
     assert(defer);
     defer->func = func;
@@ -283,6 +284,7 @@ void zl_invoke(zl_loop_t *loop, zl_job_cb cb, void *udata)
 
 void zl_invoke2(zl_loop_t *loop, zl_job_cb cb, zl_job_cb after_cb, void *udata)
 {
+    assert(cb);
     assert(ct_loop);
     assert(ct_loop != loop);
     struct job_event *je = malloc(sizeof(struct job_event));

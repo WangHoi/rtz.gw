@@ -392,7 +392,6 @@ void tcp_chan_detach(tcp_chan_t *chan)
     if (chan->eevents)
         zl_fd_ctl(chan->loop, EPOLL_CTL_DEL, chan->fd, 0, NULL, NULL);
     chan->loop = NULL;
-    chan->udata = NULL;
     WRITE_FENCE;
 }
 
