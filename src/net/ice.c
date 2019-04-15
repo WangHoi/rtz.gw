@@ -1,4 +1,4 @@
-#include "ice.h"
+﻿#include "ice.h"
 #include "sbuf.h"
 #include "event_loop.h"
 #include "tcp_chan.h"
@@ -42,7 +42,7 @@ enum {
     ICE_MAX_TCP_FRAME_SIZE = 1500,
     ICE_MAX_TCP_WRITE_BUF_SIZE = 2 << 20,
 
-    MAX_PER_SEND_SIZE = 16 * 1024,
+    MAX_PER_SEND_SIZE = 60 * 1024,
     DSCP_CLASS_EF = 0b101110,
     DROP_THREHOLD = 128 * 1024,
 };
@@ -193,8 +193,7 @@ static uint32_t get_priority(enum ice_candidate_type type, int local_preference,
 static void stun_handler(ice_server_t *srv, const void *data, int size,
                          const struct sockaddr *addr, socklen_t addrlen,
                          tcp_chan_t *tcp_chan);
-static void dtls_handler(ice_agent_t *agent, const void *data, int size,
-                         const struct sockaddr *addr, socklen_t addrlen);
+static void dtls_handler(ice_agent_t *agent, const void *data, int size);
 static void srtcp_handler(ice_agent_t *agent, const void *data, int size);
 static void srtp_handler(ice_agent_t *agent, const void *data, int size);
 static void rtcp_handler(ice_agent_t *agent, int video, const void *data, int size);
@@ -424,6 +423,7 @@ void stun_handler(ice_server_t *srv, const void *data, int size,
                   const struct sockaddr *addr, socklen_t addrlen,
                   tcp_chan_t *tcp_chan)
 {
+    struct ice_tcp_chan_udata *chan_udata = tcp_chan_get_userdata(tcp_chan);
     char host[NI_MAXHOST] = {};
     char serv[NI_MAXSERV] = {};
     int ret;
@@ -460,7 +460,9 @@ void stun_handler(ice_server_t *srv, const void *data, int size,
             return;
         }
 
-        ice_agent_t *agent = find_agent_by_username(srv, ufrag1);
+        ice_agent_t *agent = chan_udata->agent;
+        if (!agent)
+            agent = find_agent_by_username(srv, ufrag1);
         char reply_msg[256];
         stun_msg_hdr_t *reply_msg_hdr = (stun_msg_hdr_t*)reply_msg;
         if (!agent) {
@@ -477,7 +479,6 @@ void stun_handler(ice_server_t *srv, const void *data, int size,
         sbuf_strcpy(agent->stream->ruser, ufrag2);
         memcpy(&agent->peer_addr, addr, addrlen);
         agent->peer_tcp = tcp_chan;
-        struct ice_tcp_chan_udata *chan_udata = tcp_chan_get_userdata(tcp_chan);
         chan_udata->agent = agent;
         if (stun_msg_find_attr(msg_hdr, STUN_ATTR_USE_CANDIDATE))
             agent->cand_state = ICE_CAND_STATE_NOMINATED;
@@ -492,7 +493,6 @@ void stun_handler(ice_server_t *srv, const void *data, int size,
         stun_attr_xor_sockaddr_add(reply_msg_hdr, STUN_ATTR_XOR_MAPPED_ADDRESS, addr);
         stun_attr_varsize_add(reply_msg_hdr, STUN_ATTR_USERNAME,
                                 username, strlen(username), ' ');
-        stun_attr_empty_add(reply_msg_hdr, STUN_ATTR_USE_CANDIDATE);
         stun_attr_msgint_add(reply_msg_hdr, agent->stream->lpass->data, agent->stream->lpass->size);
         stun_attr_fingerprint_add(reply_msg_hdr);
 
@@ -545,8 +545,7 @@ ice_agent_t *find_agent_by_address(ice_server_t *srv, const struct sockaddr *add
     return NULL;
 }
 
-void dtls_handler(ice_agent_t *agent, const void *data, int size,
-                  const struct sockaddr *addr, socklen_t addrlen)
+void dtls_handler(ice_agent_t *agent, const void *data, int size)
 {
     if (!agent)
         return;
@@ -1161,7 +1160,7 @@ void ice_tcp_data_handler(tcp_chan_t *chan, void *udata)
             if (type == ICE_PAYLOAD_STUN) {
                 stun_handler(chan_udata->srv, data + 2, size, addr, addrlen, chan);
             } else if (type == ICE_PAYLOAD_DTLS) {
-                dtls_handler(chan_udata->agent, data + 2, size, addr, addrlen);
+                dtls_handler(chan_udata->agent, data + 2, size);
             } else if (type == ICE_PAYLOAD_RTP) {
                 srtp_handler(chan_udata->agent, data + 2, size);
             } else if (type == ICE_PAYLOAD_RTCP) {
@@ -1229,7 +1228,7 @@ void ice_tcp_sent_handler(tcp_chan_t *chan, void *udata)
         ice_component_send(component, pkt->data, pkt->length);
         update_stats(component, pkt);
         ice_free_queued_packet(pkt);
-        if (bytes > MAX_PER_SEND_SIZE)
+        if (bytes >= MAX_PER_SEND_SIZE)
             break;
     }
     //if (n > 0)

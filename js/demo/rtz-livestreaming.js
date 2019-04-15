@@ -59,7 +59,7 @@ function startStream(url) {
 				opaqueId: opaqueId,
 				url: url,
 				transport: "tcp",
-				min_delay: 0 / 40,
+				min_delay: 320 / 40,
 				success: function(handle) {
 					rtzHandle = handle;
 				},

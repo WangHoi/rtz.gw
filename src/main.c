@@ -1,4 +1,4 @@
-﻿#include "log.h"
+#include "log.h"
 #include "event_loop.h"
 #include "mpsc_queue.h"
 //#include "rtsp_client.h"
@@ -112,6 +112,22 @@ int main(int argc, char *argv[])
     ORIGIN_HOST = cfg_get_text(cfg, "ORIGIN_HOST", NULL);
     HTTP_HOOKS_URL = cfg_get_text(cfg, "HTTP_HOOKS_URL", NULL);
     cfg_del(cfg);
+
+    LLOG(LL_INFO, "#RTZ_VERSION=%s %s", RTZ_VERSION, __DATE__);
+    LLOG(LL_INFO, "#WITH_WSS=%d",
+#if WITH_WSS
+        1
+#else
+        0
+#endif
+    );
+    LLOG(LL_INFO, "#WITH_ZOOKEEPER=%d",
+#if WITH_ZOOKEEPER
+        1
+#else
+        0
+#endif
+    );
 
     LLOG(LL_INFO, "RTZ_SHARDS=%d", RTZ_SHARDS);
     LLOG(LL_INFO, "ZK_HOST=%s", ZK_HOST);

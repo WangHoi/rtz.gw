@@ -31,7 +31,6 @@ int starting_index = 0;
 
 static void start_tests();
 static void stop_tests();
-static void test_rtz_client(zl_loop_t *loop);
 static void signal_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata)
 {
     struct signalfd_siginfo si;

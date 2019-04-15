@@ -1,4 +1,4 @@
-#include "tcp_chan.h"
+﻿#include "tcp_chan.h"
 #include "nbuf.h"
 #include "net_util.h"
 #include "event_loop.h"
@@ -227,7 +227,7 @@ void *tcp_chan_get_userdata(tcp_chan_t *chan)
 void chan_fd_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata)
 {
     int n, iov_cnt, err = 0;
-    struct iovec iov[1];
+    struct iovec iov[2];
     tcp_chan_t *chan = udata;
     if (chan->flags & TCP_CHAN_ERROR)
         return;
@@ -276,7 +276,7 @@ read_again:
             int old, iov_cnt;
 write_again:
             old = nbuf_size(chan->snd_buf);
-            iov_cnt = nbuf_peekv(chan->snd_buf, iov, 1/*ARRAY_SIZE(iov)*/, NULL/*&old*/);
+            iov_cnt = nbuf_peekv(chan->snd_buf, iov, ARRAY_SIZE(iov), &old);
             assert(iov_cnt > 0);
             if (iov_cnt == 1)
                 n = write(fd, iov[0].iov_base, iov[0].iov_len);

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 project(rtz.gw C ASM)
-set(rtzgw_VERSION "0.1.1")
+set(RTZ_VERSION "0.2.0")
 
 set(OPENSSL_ROOT_DIR 3rdparty/openssl-1.1.0j)
 set(OPENSSL_INCLUDE_DIRS ${OPENSSL_ROOT_DIR}/include)
@@ -35,6 +35,7 @@ include_directories(
     ${OPENSSL_INCLUDE_DIRS}
     ${LIBUNWIND_INCLUDE_DIRS}
     )
+add_definitions(-DRTZ_VERSION="${RTZ_VERSION}")
 add_definitions(-pthread -D_GNU_SOURCE -DTHREADED=1)
 #add_definitions(-fno-omit-frame-pointer -fkeep-inline-functions -fno-inline)
 set(CMAKE_C_LINK_FLAGS "${CMAKE_C_LINK_FLAGS} -no-pie")
@@ -135,7 +136,7 @@ install(FILES dist/rtz.gw@.service DESTINATION /etc/systemd/system)
 set(CPACK_GENERATOR "DEB")
 set(CPACK_SOURCE_GENERATOR "TXZ")
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Wang Hoi")
-set(CPACK_PACKAGE_VERSION ${rtzgw_VERSION})
+set(CPACK_PACKAGE_VERSION ${RTZ_VERSION})
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "libgoogle-perftools4 (>= 2.4-0)")
 set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA "${CMAKE_CURRENT_SOURCE_DIR}/dist/postinst;${CMAKE_CURRENT_SOURCE_DIR}/dist/prerm;${CMAKE_CURRENT_SOURCE_DIR}/dist/postrm;")
 include(CPack)

@@ -1,4 +1,4 @@
-#include "http_hooks.h"
+﻿#include "http_hooks.h"
 #include "event_loop.h"
 #include "tcp_chan.h"
 #include "log.h"
@@ -82,7 +82,7 @@ void http_fd_read_handler(tcp_chan_t *chan, void *udata)
         rend += 4;
         http_response_t *r = http_parse_response(ctx, ctx->response_buf->data, rend);
         if (r && rend + r->body_len == sbuf_tail(ctx->response_buf)) {
-            //LLOG(LL_TRACE, "recv '%s'", ctx->response_buf->data);
+            LLOG(LL_TRACE, "http client_id=%ld recv '%s'", ctx->client_id, ctx->response_buf->data);
             cJSON *json = cJSON_Parse(rend);
             if (json) {
                 cJSON *code_node = cJSON_GetObjectItem(json, "code");
@@ -111,7 +111,6 @@ static void http_hook_ctx_del(struct http_hook_ctx *ctx)
 
 static void http_fd_event_handler(tcp_chan_t *chan, int status, void *udata)
 {
-    //LLOG(LL_DEBUG, "http event %d", status);
     struct http_hook_ctx *ctx = udata;
     if (status > 0) {
         /* Connected, send request */
@@ -123,19 +122,20 @@ static void http_fd_event_handler(tcp_chan_t *chan, int status, void *udata)
             "Content-Length:%d\r\n"
             "\r\n", ctx->path, RTZ_LOCAL_IP, ctx->body->size);
         sbuf_append(request, ctx->body);
-        //LLOG(LL_DEBUG, "send '%s'", request->data);
+        LLOG(LL_DEBUG, "http client_id=%ld connected, send '%s'", ctx->client_id, request->data);
         tcp_chan_write(chan, request->data, request->size);
         sbuf_del(request);
         return;
     }
 
+    LLOG(LL_WARN, "http_hook client_id=%ld socket status %d.", ctx->client_id, status);
     if (status == 0) {
         /* EOF */
         int rlen = tcp_chan_get_read_buf_size(chan);
         int olen = ctx->response_buf->size;
         sbuf_resize(ctx->response_buf, olen + rlen);
         tcp_chan_read(chan, ctx->response_buf->data + olen, rlen);
-        //LLOG(LL_TRACE, "recv '%s'", ctx->response_buf->data);
+        LLOG(LL_TRACE, "http client_id=%ld recv '%s'", ctx->client_id, ctx->response_buf->data);
         char *rend = strstr(ctx->response_buf->data, "\r\n\r\n");
         if (rend) {
             rend += 4;
@@ -154,7 +154,6 @@ static void http_fd_event_handler(tcp_chan_t *chan, int status, void *udata)
             http_response_del(r);
         }
     } else {
-        LLOG(LL_WARN, "http_hook client_id=%ld socket error.", ctx->client_id);
         if (ctx->func)
             ctx->func(ctx->loop, ctx->client_id, HTTP_HOOK_OK, ctx->udata);
     }

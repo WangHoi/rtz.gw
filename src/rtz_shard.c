@@ -1,4 +1,4 @@
-#include "rtz_shard.h"
+﻿#include "rtz_shard.h"
 #include "net/rtz_server.h"
 #include "net/nbuf.h"
 #include "event_loop.h"
@@ -26,6 +26,7 @@ static rtz_shard_t *rtz_shards[MAX_RTZ_SHARDS] = {};
 static __thread int rtz_shard_index_ct = -1;
 static zl_loop_t *rtz_control_loop = NULL;
 static int rtz_total_load = 0;
+static volatile int shards_stopping = 0;
 
 static rtz_shard_t *shard_new(int idx);
 static void rtz_shard_del(rtz_shard_t *d);
@@ -80,7 +81,8 @@ zl_loop_t *rtz_shard_get_control_loop()
 
 int rtz_get_total_load()
 {
-    zl_invoke(rtz_shards[0]->loop, get_shard_load, 0);
+    if (!shards_stopping)
+        zl_invoke(rtz_shards[0]->loop, get_shard_load, 0);
     return rtz_total_load;
 }
 
@@ -165,6 +167,7 @@ void after_stop_shard(zl_loop_t *loop, void *udata)
 {
     rtz_shard_t *d = udata;
     int ret;
+    shards_stopping = 1;
     LLOG(LL_INFO, "joining shard %d thread...", d->idx);
     ret = pthread_tryjoin_np(d->tid, NULL);
     while (ret) {
