@@ -108,7 +108,6 @@ again:
     }
     //LLOG(LL_TRACE, "new fd %d", chan->fd);
     set_tcp_nodelay(chan->fd, 1);
-    set_socket_send_buf_size(chan->fd, 8192);
     chan->rcv_buf = nbuf_new1(TCP_CHAN_RCV_BUF_SIZE);
     chan->snd_buf = nbuf_new1(TCP_CHAN_SND_BUF_SIZE);
     update_chan_events(chan);

@@ -1,4 +1,4 @@
-﻿#include "ice.h"
+#include "ice.h"
 #include "sbuf.h"
 #include "event_loop.h"
 #include "tcp_chan.h"
@@ -247,11 +247,12 @@ void ice_tcp_accept_handler(tcp_srv_t *tcp_srv, tcp_chan_t *chan, void *udata)
     chan_udata->srv = srv;
     tcp_chan_set_cb(chan, ice_tcp_data_handler, ice_tcp_sent_handler, ice_tcp_error_handler, chan_udata);
     /* typical minimum buffer size: 4608 */
-    set_socket_send_buf_size(tcp_chan_fd(chan), 0/*16384*/);
+    //set_socket_send_buf_size(tcp_chan_fd(chan), 0/*16384*/);
     int ret = set_ip_tos(tcp_chan_fd(chan), DSCP_CLASS_EF); /* EF class */
     //int size;
     //get_socket_send_buf_size(tcp_chan_fd(chan), &size);
     //LLOG(LL_WARN, "new send buf size=%d", size);
+    set_tcp_notsent_lowat(tcp_chan_fd(chan), 8192);
 }
 
 void ice_server_start(ice_server_t *srv)
@@ -830,7 +831,7 @@ void ice_send(ice_agent_t *agent, int type, const void *data, int size)
     pkt->type = type;
     pkt->encrypted = 0;
     pkt->retransmission = 0;
-    pkt->added = zl_hrtimestamp();
+    pkt->added = zl_timestamp();
     INIT_LIST_HEAD(&pkt->link); /* Allow list_del() */
     ice_send_packet(agent, pkt);
 }

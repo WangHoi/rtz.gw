@@ -23,6 +23,21 @@ int set_tcp_nodelay(int fd, int nodelay)
 	return setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(int));
 }
 
+int set_tcp_notsent_lowat(int fd, int bytes)
+{
+    return setsockopt(fd, IPPROTO_TCP, TCP_NOTSENT_LOWAT, &bytes, sizeof(int));
+}
+
+int get_tcp_notsent_lowat(int fd)
+{
+    int bytes;
+    socklen_t optlen = sizeof(int);
+    int ret = getsockopt(fd, IPPROTO_TCP, TCP_NOTSENT_LOWAT, &bytes, &optlen);
+    if (!ret)
+        return bytes;
+    return -1;
+}
+
 int set_socket_max_pacing_rate(int fd, int rate)
 {
     return setsockopt(fd, SOL_SOCKET, SO_MAX_PACING_RATE,
