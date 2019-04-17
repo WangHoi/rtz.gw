@@ -2,6 +2,7 @@
 #include "sbuf.h"
 #include "event_loop.h"
 #include "net/tcp_chan.h"
+#include "net/tcp_simple_writer.h"
 #include "net/http_types.h"
 #include "net/rtp.h"
 #include "net/dtls.h"
@@ -31,8 +32,10 @@ struct rtz_client_t {
     int flag;
     zl_loop_t *loop;
     tcp_chan_t *chan;
+    tcp_simple_writer_t *chan_writer;
     sbuf_t *rcv_buf;
     tcp_chan_t *media_chan;
+    tcp_simple_writer_t *media_chan_writer;
     sbuf_t *media_rcv_buf;
 
     sbuf_t *session_id;
@@ -73,8 +76,10 @@ struct rtz_client_t {
     long send_bytes;
 };
 
+static void rtz_client_sent_handler(tcp_chan_t *chan, void *udata);
 static void rtz_client_data_handler(tcp_chan_t *chan, void *udata);
 static void rtz_client_event_handler(tcp_chan_t *chan, int status, void *udata);
+static void rtz_media_sent_handler(tcp_chan_t *chan, void *udata);
 static void rtz_media_data_handler(tcp_chan_t *chan, void *udata);
 static void rtz_media_event_handler(tcp_chan_t *chan, int status, void *udata);
 static void send_ws_frame(rtz_client_t *client, int opcode, const void *data, int size);
@@ -122,8 +127,12 @@ void rtz_client_del(rtz_client_t *client)
          client, client->recv_bytes, client->send_bytes);
     if (!client)
         return;
+    if (client->chan_writer)
+        tcp_simple_writer_del(client->chan_writer);
     if (client->chan)
         tcp_chan_close(client->chan, 0);
+    if (client->media_chan_writer)
+        tcp_simple_writer_del(client->media_chan_writer);
     if (client->media_chan)
         tcp_chan_close(client->media_chan, 0);
     if (client->stun_timer != -1)
@@ -165,7 +174,7 @@ void rtz_client_del(rtz_client_t *client)
 void rtz_client_open(rtz_client_t *client, const char *ip, int port)
 {
     client->chan = tcp_connect(client->loop, ip, port);
-    tcp_chan_set_cb(client->chan, rtz_client_data_handler, NULL, rtz_client_event_handler, client);
+    tcp_chan_set_cb(client->chan, rtz_client_data_handler, rtz_client_sent_handler, rtz_client_event_handler, client);
 }
 
 void rtz_client_play(rtz_client_t *client, const char *url)
@@ -260,16 +269,23 @@ void rtz_client_data_handler(tcp_chan_t *chan, void *udata)
     }
 }
 
+void rtz_client_sent_handler(tcp_chan_t *chan, void *udata)
+{
+    rtz_client_t *client = udata;
+    tcp_simple_writer_sent_notify(client->chan_writer);
+}
+
 void rtz_client_event_handler(tcp_chan_t *chan, int status, void *udata)
 {
     rtz_client_t *client = udata;
     if (status > 0) {
         LLOG(LL_TRACE, "client %p connected", udata);
+        client->chan_writer = tcp_simple_writer_new(chan);
         client->flag = RTZ_CLIENT_CONNECTED;
         sbuf_t *b = sbuf_new1(1024);
         sbuf_printf(b, "GET /rtz HTTP/1.1\r\n"
                     "Sec-WebSocket-Key:abc\r\n\r\n");
-        tcp_chan_write(chan, b->data, b->size);
+        tcp_simple_writer_perform(client->chan_writer, b->data, b->size);
         sbuf_del(b);
     } else {
         LLOG(LL_ERROR, "%p socket event %d", udata, status);
@@ -299,8 +315,11 @@ void send_ws_frame(rtz_client_t *client, int opcode, const void *data, int size)
         header[1] = size;
         n = 2;
     }
-    tcp_chan_write(client->chan, header, n);
-    tcp_chan_write(client->chan, data, size);
+    struct iovec iov[2] = {
+        { header, n },
+        { (void*)data, size },
+    };
+    tcp_simple_writer_performv(client->chan_writer, iov, 2);
 }
 
 void send_json(rtz_client_t *client, cJSON *json)
@@ -394,7 +413,7 @@ void handle_event(rtz_client_t *client, const char *transaction,
         sbuf_strcpy(client->handle_id, handle_id);
         process_sdp_offer(client, sdp_offer);
         client->media_chan = tcp_connect(client->loop, client->ice_rip->data, client->ice_rport);
-        tcp_chan_set_cb(client->media_chan, rtz_media_data_handler, NULL,
+        tcp_chan_set_cb(client->media_chan, rtz_media_data_handler, rtz_media_sent_handler,
                         rtz_media_event_handler, client);
         sbuf_t *sdp_answer = create_sdp(client, 1);
         send_sdp_answer(client, sdp_answer->data);
@@ -515,13 +534,20 @@ void process_sdp_offer(rtz_client_t *client, const char *sdp)
         sscanf(p, "a=ssrc: %"SCNu32, &client->video_ssrc);
     }
 
-    //LLOG(LL_TRACE, "ruser=%s rpwd=%s cand:%s %s:%d ssrc a=%u v=%u", ice_ruser, ice_rpwd,
+    //LLOG(LL_TRACE, "client %p ruser=%s rpwd=%s cand:%s %s:%d ssrc a=%u v=%u",
+    //     client, ice_ruser, ice_rpwd,
     //     ice_transport, ice_rip, client->ice_rport, client->audio_ssrc, client->video_ssrc);
 
     free(ice_ruser);
     free(ice_rpwd);
     free(ice_transport);
     free(ice_rip);
+}
+
+void rtz_media_sent_handler(tcp_chan_t *chan, void *udata)
+{
+    rtz_client_t *client = udata;
+    tcp_simple_writer_sent_notify(client->media_chan_writer);
 }
 
 void rtz_media_data_handler(tcp_chan_t *chan, void *udata)
@@ -558,6 +584,7 @@ void rtz_media_event_handler(tcp_chan_t *chan, int status, void *udata)
     rtz_client_t *client = udata;
     if (status > 0) {
         LLOG(LL_TRACE, "client %p media channel connected", udata);
+        client->media_chan_writer = tcp_simple_writer_new(chan);
         client->flag |= RTZ_CLIENT_MEDIA_CONNECTED;
         rtz_client_srtp_create(client);
         client->stun_timer = zl_timer_start(client->loop, 1000, 1000,
@@ -588,8 +615,11 @@ void send_media_data(rtz_client_t *client, const void *data, int size)
     uint8_t hdr[2];
     hdr[0] = (size & 0xff00) >> 8;
     hdr[1] = size & 0xff;
-    tcp_chan_write(client->media_chan, hdr, 2);
-    tcp_chan_write(client->media_chan, data, size);
+    struct iovec iov[2] = {
+        { hdr, 2 },
+        { (void*)data, size },
+    };
+    tcp_simple_writer_performv(client->media_chan_writer, iov, 2);
     rtz_update_stats(client, 0, 2 + size);
 }
 
@@ -622,7 +652,7 @@ void rtz_client_rtcp_timeout_handler(zl_loop_t *loop, int timer, void *udata)
 
     char rtcpbuf[1024];
     rtcp_rr *rr = (rtcp_rr*)&rtcpbuf;
-    int rrlen = 8 + 24;
+    int rrlen = sizeof(rtcp_rr);
     rr->header.version = 2;
     rr->header.type = RTCP_RR;
     rr->header.rc = 1;
@@ -633,7 +663,6 @@ void rtz_client_rtcp_timeout_handler(zl_loop_t *loop, int timer, void *udata)
     int remblen = rtcp_remb(rtcpbuf + rrlen, 64, 8388608); // 8Mbps
     int plen = rrlen + remblen;
     int ret = srtp_protect_rtcp(client->srtp_out, rtcpbuf, &plen);
-    //LLOG(LL_DEBUG, "srtcp rtcp ret=%d pkt_len=%d", ret, plen);
     if (ret == srtp_err_status_ok)
         send_media_data(client, rtcpbuf, plen);
 }

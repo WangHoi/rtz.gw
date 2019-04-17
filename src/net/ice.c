@@ -2,6 +2,7 @@
 #include "sbuf.h"
 #include "event_loop.h"
 #include "tcp_chan.h"
+#include "tcp_simple_writer.h"
 #include "net_util.h"
 #include "log.h"
 #include "list.h"
@@ -183,6 +184,7 @@ struct ice_agent_t {
 struct ice_tcp_chan_udata {
     ice_server_t *srv;
     ice_agent_t *agent;
+    tcp_simple_writer_t *chan_writer;
 };
 
 static ice_stream_t *ice_stream_new(ice_agent_t *handle);
@@ -245,6 +247,7 @@ void ice_tcp_accept_handler(tcp_srv_t *tcp_srv, tcp_chan_t *chan, void *udata)
     struct ice_tcp_chan_udata *chan_udata = malloc(sizeof(struct ice_tcp_chan_udata));
     memset(chan_udata, 0, sizeof(struct ice_tcp_chan_udata));
     chan_udata->srv = srv;
+    chan_udata->chan_writer = tcp_simple_writer_new(chan);
     tcp_chan_set_cb(chan, ice_tcp_data_handler, ice_tcp_sent_handler, ice_tcp_error_handler, chan_udata);
     /* typical minimum buffer size: 4608 */
     //set_socket_send_buf_size(tcp_chan_fd(chan), 0/*16384*/);
@@ -461,7 +464,7 @@ void stun_handler(ice_server_t *srv, const void *data, int size,
             return;
         }
 
-        ice_agent_t *agent = chan_udata->agent;
+        ice_agent_t *agent = chan_udata ? chan_udata->agent : NULL;
         if (!agent)
             agent = find_agent_by_username(srv, ufrag1);
         char reply_msg[256];
@@ -580,7 +583,8 @@ void srtcp_handler(ice_agent_t *agent, const void *data, int size)
     char *buf = (void*)data;
     srtp_err_status_t res = srtp_unprotect_rtcp(component->dtls->srtp_in, buf, &buflen);
     if (res != srtp_err_status_ok) {
-        LLOG(LL_ERROR, "SRTCP unprotect error: %s (len=%d-->%d)", rtz_srtp_error_str(res), size, buflen);
+        LLOG(LL_ERROR, "SRTCP unprotect error: %s (len=%d-->%d)",
+            rtz_srtp_error_str(res), size, buflen);
         return;
     }
     /* Check if there's an RTCP BYE: in case, let's log it */
@@ -708,7 +712,9 @@ int ice_component_send(ice_component_t *component, const void *data, int size)
     struct sockaddr *addr = (struct sockaddr*)&agent->peer_addr;
     socklen_t slen = sizeof(struct sockaddr_in);
     if (agent->peer_tcp) {
-        if (tcp_chan_get_write_buf_size(agent->peer_tcp) > ICE_MAX_TCP_WRITE_BUF_SIZE) {
+        enum ice_payload_type type = ice_get_payload_type(data, size);
+        struct ice_tcp_chan_udata *chan_udata = tcp_chan_get_userdata(agent->peer_tcp);
+        if (tcp_simple_writer_buf_size(chan_udata->chan_writer) > ICE_MAX_TCP_WRITE_BUF_SIZE) {
             LLOG(LL_ERROR, "rtz_handle %p ice_agent %p slow connection, abort stun-tcp channel.",
                  agent->rtz_handle, agent);
             ice_tcp_error_cleanup(agent->peer_tcp, tcp_chan_get_userdata(agent->peer_tcp));
@@ -717,8 +723,11 @@ int ice_component_send(ice_component_t *component, const void *data, int size)
         uint8_t frame_hdr[2];
         frame_hdr[0] = (size & 0xff00) >> 8;
         frame_hdr[1] = (size & 0xff);
-        tcp_chan_write(agent->peer_tcp, frame_hdr, 2);
-        tcp_chan_write(agent->peer_tcp, data, size);
+        struct iovec iov[2] = {
+            { frame_hdr, 2 },
+            { (void*)data, size },
+        };
+        tcp_simple_writer_performv(chan_udata->chan_writer, iov, 2);
         return size;
     }
     return -1;
@@ -874,15 +883,18 @@ void ice_send_packet(ice_agent_t *agent, ice_queued_packet_t *pkt)
                 ice_free_queued_packet(pkt);
                 return;
             }
-            if (agent->peer_tcp && tcp_chan_get_write_buf_size(agent->peer_tcp)) {
-                /* Queue to send later. */
-                pkt->encrypted = 1;
-                pkt->length = plen;
-                list_add_tail(&pkt->link, &agent->pkt_list);
-            } else {
-                ice_component_send(component, pkt->data, plen);
-                update_stats(component, pkt);
-                ice_free_queued_packet(pkt);
+            if (agent->peer_tcp) {
+                struct ice_tcp_chan_udata *chan_udata = tcp_chan_get_userdata(agent->peer_tcp);
+                if (tcp_simple_writer_buf_size(chan_udata->chan_writer)) {
+                    /* Queue to send later. */
+                    pkt->encrypted = 1;
+                    pkt->length = plen;
+                    list_add_tail(&pkt->link, &agent->pkt_list);
+                } else {
+                    ice_component_send(component, pkt->data, plen);
+                    update_stats(component, pkt);
+                    ice_free_queued_packet(pkt);
+                }
             }
         }
     } else if (pkt->type == ICE_PACKET_AUDIO_RTP || pkt->type == ICE_PACKET_VIDEO_RTP) {
@@ -910,28 +922,31 @@ void ice_send_packet(ice_agent_t *agent, ice_queued_packet_t *pkt)
                 header->ssrc = htonl((pkt->type == ICE_PACKET_VIDEO_RTP) ? stream->video_ssrc : stream->audio_ssrc);
             }
 
-            if (agent->peer_tcp && tcp_chan_get_write_buf_size(agent->peer_tcp)) {
-                /* Queue to send later. */
-                list_add_tail(&pkt->link, &agent->pkt_list);
-            } else {
-                /* Overwrite seqno */
-                if (!pkt->retransmission) {
-                    if (pkt->type == ICE_PACKET_VIDEO_RTP) {
-                        header->ssrc = htonl(stream->video_ssrc);
-                        header->seq_number = htons(stream->video_seqno++);
-                    } else {
-                        header->ssrc = htonl(stream->audio_ssrc);
-                        header->seq_number = htons(stream->audio_seqno++);
+            if (agent->peer_tcp) {
+                struct ice_tcp_chan_udata *chan_udata = tcp_chan_get_userdata(agent->peer_tcp);
+                if (tcp_simple_writer_buf_size(chan_udata->chan_writer)) {
+                    /* Queue to send later. */
+                    list_add_tail(&pkt->link, &agent->pkt_list);
+                } else {
+                    /* Overwrite seqno */
+                    if (!pkt->retransmission) {
+                        if (pkt->type == ICE_PACKET_VIDEO_RTP) {
+                            header->ssrc = htonl(stream->video_ssrc);
+                            header->seq_number = htons(stream->video_seqno++);
+                        } else {
+                            header->ssrc = htonl(stream->audio_ssrc);
+                            header->seq_number = htons(stream->audio_seqno++);
+                        }
                     }
+                    int plen = pkt->length;
+                    int res = srtp_protect(component->dtls->srtp_out, pkt->data, &plen);
+                    //LLOG(LL_TRACE, "encrypt %d -> %d", pkt->length, plen);
+                    if (res == srtp_err_status_ok) {
+                        ice_component_send(component, pkt->data, plen);
+                        update_stats(component, pkt);
+                    }
+                    ice_free_queued_packet(pkt);
                 }
-                int plen = pkt->length;
-                int res = srtp_protect(component->dtls->srtp_out, pkt->data, &plen);
-                //LLOG(LL_TRACE, "encrypt %d -> %d", pkt->length, plen);
-                if (res == srtp_err_status_ok) {
-                    ice_component_send(component, pkt->data, plen);
-                    update_stats(component, pkt);
-                }
-                ice_free_queued_packet(pkt);
             }
         }
 
@@ -1052,6 +1067,7 @@ void ice_tcp_error_cleanup(tcp_chan_t *chan, struct ice_tcp_chan_udata *chan_uda
             //ice_webrtc_hangup(agent, "TcpSocket Error");
         }
     }
+    tcp_simple_writer_del(chan_udata->chan_writer);
     free(chan_udata);
     tcp_chan_close(chan, 0);
 }
@@ -1180,11 +1196,13 @@ void ice_tcp_data_handler(tcp_chan_t *chan, void *udata)
 
 void ice_tcp_sent_handler(tcp_chan_t *chan, void *udata)
 {
-    int qlen = tcp_chan_get_write_buf_size(chan);
+    struct ice_tcp_chan_udata *chan_udata = udata;
+    tcp_simple_writer_sent_notify(chan_udata->chan_writer);
+
+    int qlen = tcp_simple_writer_buf_size(chan_udata->chan_writer);
     if (qlen > 0)
         return;
 
-    struct ice_tcp_chan_udata *chan_udata = udata;
     ice_agent_t *agent = chan_udata->agent;
     //struct sockaddr_in addr_in;
     //struct sockaddr *addr = (struct sockaddr*)&addr_in;

@@ -11,7 +11,9 @@
 #include "media/codec_types.h"
 #include "media/rtp_types.h"
 #include "media/h26x.h"
+#include "net/nbuf.h"
 #include "tcp_chan.h"
+#include "tcp_simple_writer.h"
 #include "timestamp.h"
 #include "rtz_server.h"
 #include <stdlib.h>
@@ -54,6 +56,7 @@ typedef enum rtmp_handshake_state_t {
 struct rtmp_client_t {
     zl_loop_t *loop;
     tcp_chan_t *chan;
+    tcp_simple_writer_t *chan_writer;
     sbuf_t *chunk_body[RTMP_MAX_CHUNK_STREAMS];
 
     sbuf_t *uri;
@@ -143,6 +146,7 @@ static void finish_requests(rtmp_client_t *client, unsigned tx_id, int64_t statu
 static rtmp_status_t convert_to_status(const char *data, size_t size);
 static const char *get_status_text(rtmp_status_t status);
 static void rtmp_client_data_handler(tcp_chan_t *chan, void *udata);
+static void rtmp_client_sent_handler(tcp_chan_t *chan, void *udata);
 static void rtmp_client_event_handler(tcp_chan_t *chan, int status, void *udata);
 static void rtmp_write_handler(const void *data, int size, void *udata);
 
@@ -178,6 +182,10 @@ void rtmp_client_set_userdata(rtmp_client_t *client, void *udata)
 */
 void rtmp_client_del(rtmp_client_t *client)
 {
+    if (client->chan_writer) {
+        tcp_simple_writer_del(client->chan_writer);
+        client->chan_writer = NULL;
+    }
     if (client->chan) {
         tcp_chan_close(client->chan, 0);
         client->chan = NULL;
@@ -237,7 +245,7 @@ void rtmp_client_tcp_connect(rtmp_client_t *client, zl_defer_cb func)
     }
 
     client->chan = tcp_connect(client->loop, client->ip->data, client->port);
-    tcp_chan_set_cb(client->chan, rtmp_client_data_handler, NULL, rtmp_client_event_handler, client);
+    tcp_chan_set_cb(client->chan, rtmp_client_data_handler, rtmp_client_sent_handler, rtmp_client_event_handler, client);
 }
 
 void rtmp_client_data_handler(tcp_chan_t *chan, void *udata)
@@ -255,12 +263,20 @@ void rtmp_client_data_handler(tcp_chan_t *chan, void *udata)
     }
 }
 
+void rtmp_client_sent_handler(tcp_chan_t *chan, void *udata)
+{
+    rtmp_client_t *client = udata;
+    if (client->chan_writer)
+        tcp_simple_writer_sent_notify(client->chan_writer);
+}
+
 void rtmp_client_event_handler(tcp_chan_t *chan, int status, void *udata)
 {
     LLOG(LL_TRACE, "rtmp_client %p event %d", udata, status);
     rtmp_client_t *client = udata;
     if (status > 0) {
         /* Connected */
+        client->chan_writer = tcp_simple_writer_new(chan);
         send_c01(client);
         client->hstate = RTMP_HS_WAIT_S1;
     } else {
@@ -331,6 +347,10 @@ void rtmp_client_publish(rtmp_client_t *client, zl_defer_cb func)
 
 void rtmp_client_abort(rtmp_client_t *client)
 {
+    if (client->chan_writer) {
+        tcp_simple_writer_del(client->chan_writer);
+        client->chan_writer = NULL;
+    }
     if (client->chan) {
         tcp_chan_close(client->chan, 0);
         client->chan = NULL;
@@ -380,7 +400,8 @@ void send_c01(rtmp_client_t *client)
     p += pack_be32(p, now);
     p += pack_be32(p, 0);
     memset(p, 0, RTMP_HANDSHAKE_C1_SIZE - 8);
-    tcp_chan_write(client->chan, data, sizeof(data));
+
+    tcp_simple_writer_perform(client->chan_writer, data, sizeof(data));
 }
 
 void session_handler(rtmp_client_t *client)
@@ -496,7 +517,7 @@ void session_handler(rtmp_client_t *client)
 
 void send_c2(rtmp_client_t *client, const char *s1)
 {
-    tcp_chan_write(client->chan, s1, RTMP_HANDSHAKE_C2_SIZE);
+    tcp_simple_writer_perform(client->chan_writer, s1, RTMP_HANDSHAKE_C2_SIZE);
 }
 #if 0
 void error_handler(rtmp_client_t *client, int err)
@@ -674,7 +695,7 @@ void event_handler(rtmp_client_t *peer, rtmp_event_type_t type,
                    const char *data, int size)
 {
     if (type == RTMP_EVENT_PING_REQUEST) {
-        rtmp_write_pong(data, size, rtmp_write_handler, peer->chan);
+        rtmp_write_pong(data, size, rtmp_write_handler, peer);
     } else if (type == RTMP_EVENT_SET_BUFFER_LENGTH) {
         uint32_t stream_id = unpack_be32(data);
         uint32_t delay = unpack_be32(data + 4);
@@ -758,7 +779,7 @@ void add_request(rtmp_client_t *client, rtmp_request_t *req)
     req->timestamp = zl_timestamp();
     list_add_tail(&req->link, &client->request_list);
     rtmp_write_chunk(req->channel, 0, RTMP_MESSAGE_AMF0_CMD, 0,
-                     req->buf->data, req->buf->size, rtmp_write_handler, client->chan);
+                     req->buf->data, req->buf->size, rtmp_write_handler, client);
 }
 
 rtmp_request_t *rtmp_request_new(rtmp_client_t *client, const char *method,
@@ -944,7 +965,7 @@ void send_video(rtmp_client_t *client, uint32_t timestamp, const void *data, int
             sbuf_append(buf, client->vcodec->pps_data);
 
             rtmp_write_chunk(RTMP_SOURCE_CHANNEL, 0, RTMP_MESSAGE_VIDEO,
-                             timestamp, buf->data, buf->size, rtmp_write_handler, client->chan);
+                             timestamp, buf->data, buf->size, rtmp_write_handler, client);
 
             sbuf_clear(buf);
             LLOG(LL_TRACE, "send AVC sequence header");
@@ -959,7 +980,7 @@ void send_video(rtmp_client_t *client, uint32_t timestamp, const void *data, int
         sbuf_append2(buf, data, size);
 
         rtmp_write_chunk(RTMP_SOURCE_CHANNEL, 0, RTMP_MESSAGE_VIDEO,
-                         timestamp, buf->data, buf->size, rtmp_write_handler, client->chan);
+                         timestamp, buf->data, buf->size, rtmp_write_handler, client);
         if (!(client->flag & RTMP_CLIENT_IN_EVENT_CB))
             update_poll_events(client);
         LLOG(LL_TRACE, "send AVC NALU KeyFrame timestamp=%u size=%d", timestamp, buf->size);
@@ -975,7 +996,7 @@ void send_video(rtmp_client_t *client, uint32_t timestamp, const void *data, int
         sbuf_append2(buf, data, size);
 
         rtmp_write_chunk(RTMP_SOURCE_CHANNEL, 0, RTMP_MESSAGE_VIDEO,
-                         timestamp, buf->data, buf->size, rtmp_write_handler, client->chan);
+                         timestamp, buf->data, buf->size, rtmp_write_handler, client);
         if (!(client->flag & RTMP_CLIENT_IN_EVENT_CB))
             update_poll_events(client);
         //LLOG(LL_TRACE, "send AVC NALU PFrame timestamp=%u size=%d", timestamp, buf->size);
@@ -1352,6 +1373,6 @@ void metadata_handler(rtmp_client_t *peer, const char *data, int size)
 
 void rtmp_write_handler(const void *data, int size, void *udata)
 {
-    tcp_chan_t *chan = udata;
-    tcp_chan_write(chan, data, size);
+    rtmp_client_t *client = udata;
+    tcp_simple_writer_perform(client->chan_writer, data, size);
 }

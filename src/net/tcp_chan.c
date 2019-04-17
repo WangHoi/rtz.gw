@@ -1,4 +1,4 @@
-﻿#include "tcp_chan.h"
+#include "tcp_chan.h"
 #include "nbuf.h"
 #include "net_util.h"
 #include "event_loop.h"
@@ -38,7 +38,7 @@ struct tcp_chan_t {
     int fd;
     struct sockaddr_storage addr;
     nbuf_t *rcv_buf;
-    nbuf_t *snd_buf;
+    int poll_write;
     tcp_chan_buffer_cb read_cb;
     tcp_chan_buffer_cb write_cb;
     tcp_chan_event_cb error_cb;
@@ -109,7 +109,6 @@ again:
     //LLOG(LL_TRACE, "new fd %d", chan->fd);
     set_tcp_nodelay(chan->fd, 1);
     chan->rcv_buf = nbuf_new1(TCP_CHAN_RCV_BUF_SIZE);
-    chan->snd_buf = nbuf_new1(TCP_CHAN_SND_BUF_SIZE);
     update_chan_events(chan);
     return chan;
 
@@ -137,7 +136,7 @@ void tcp_chan_close(tcp_chan_t *chan, int flush_write)
      *      b. pending buffer to send
      */
     if ((chan->flags & TCP_CHAN_IN_EVENT_CB)
-        || (flush_write && !(chan->flags & TCP_CHAN_ERROR) && !nbuf_empty(chan->snd_buf))) {
+        || (flush_write && !(chan->flags & TCP_CHAN_ERROR) /*&& !nbuf_empty(chan->snd_buf)*/)) {
 
         chan->flags |= TCP_CHAN_CLOSING;
         return;
@@ -150,7 +149,6 @@ void tcp_chan_close(tcp_chan_t *chan, int flush_write)
             zl_fd_ctl(chan->loop, EPOLL_CTL_DEL, chan->fd, 0, NULL, NULL);
     }
     nbuf_del(chan->rcv_buf);
-    nbuf_del(chan->snd_buf);
     close(chan->fd);
     free(chan);
 }
@@ -185,21 +183,42 @@ char tcp_chan_peekc(tcp_chan_t *chan)
     return nbuf_peekc(chan->rcv_buf);
 }
 
-int tcp_chan_get_write_buf_size(tcp_chan_t *chan)
+void tcp_chan_enable_poll_writable(tcp_chan_t *chan, int enable)
 {
-    return nbuf_size(chan->snd_buf);
-}
-
-int tcp_chan_write_buf_empty(tcp_chan_t * chan)
-{
-    return nbuf_empty(chan->snd_buf);
+    if (chan->poll_write == enable)
+        return;
+    chan->poll_write = enable;
+    if (!(chan->flags & TCP_CHAN_IN_EVENT_CB))
+        update_chan_events(chan);
 }
 
 int tcp_chan_write(tcp_chan_t *chan, const void *data, int size)
 {
-    nbuf_append(chan->snd_buf, data, size);
-    update_chan_events(chan);
-    return size;
+    struct iovec iov = { (void*)data, size };
+    return tcp_chan_writev(chan, &iov, 1);
+}
+
+int tcp_chan_writev(tcp_chan_t *chan, struct iovec *iov, int iov_cnt)
+{
+    assert(iov_cnt > 0);
+    int n, err = 0;
+write_again:
+    if (iov_cnt > 1)
+        n = writev(chan->fd, iov, iov_cnt);
+    else
+        n = write(chan->fd, iov->iov_base, iov->iov_len);
+    if (n == -1) {
+        if (errno == EINTR) {
+            LLOG(LL_TRACE, "EINTR");
+            goto write_again;
+        }
+        if (errno != EAGAIN) {
+            LLOG(LL_ERROR, "write fd %d error: %s.", chan->fd, strerror(errno));
+            err = -errno;
+            chan->flags |= TCP_CHAN_ERROR;
+        }
+    }
+    return n;
 }
 
 int tcp_chan_get_peername(tcp_chan_t *chan, struct sockaddr *addr, int addrlen)
@@ -271,33 +290,9 @@ read_again:
                 err = -err;
                 chan->flags |= TCP_CHAN_ERROR;
             }
-        } else if (!nbuf_empty(chan->snd_buf)) {
-            int old, iov_cnt;
-write_again:
-            old = nbuf_size(chan->snd_buf);
-            iov_cnt = nbuf_peekv(chan->snd_buf, iov, ARRAY_SIZE(iov), &old);
-            assert(iov_cnt > 0);
-            if (iov_cnt == 1)
-                n = write(fd, iov[0].iov_base, iov[0].iov_len);
-            else
-                n = writev(fd, iov, iov_cnt);
-            if (n > 0) {
-                nbuf_consume(chan->snd_buf, n);
-            } else if (n == -1) {
-                if (errno == EINTR) {
-                    LLOG(LL_TRACE, "EINTR");
-                    /*goto write_again;*/
-                }
-                if (errno != EAGAIN) {
-                    LLOG(LL_ERROR, "write fd %d error: %s.", fd, strerror(errno));
-                    err = -errno;
-                    chan->flags |= TCP_CHAN_ERROR;
-                }
-            }
-            if (n > 0) {
-                if (chan->write_cb)
-                    chan->write_cb(chan, chan->udata);
-            }
+        } else if (chan->poll_write) {
+            if (chan->write_cb)
+                chan->write_cb(chan, chan->udata);
         }
     }
 
@@ -311,8 +306,7 @@ write_again:
 
     /* check deferred close */
     if (chan->loop && (chan->flags & TCP_CHAN_CLOSING)) {
-        if (nbuf_empty(chan->snd_buf))
-            tcp_chan_close(chan, 0);
+        tcp_chan_close(chan, 0);
     }
 }
 
@@ -324,7 +318,7 @@ void update_chan_events(tcp_chan_t* chan)
     if (!(chan->flags & TCP_CHAN_ERROR)) {
         if (!(chan->flags & TCP_CHAN_CLOSING))
             pevents |= EPOLLIN;
-        if ((chan->flags & TCP_CHAN_CONNECTING) || !nbuf_empty(chan->snd_buf))
+        if ((chan->flags & TCP_CHAN_CONNECTING) || chan->poll_write)
             pevents |= EPOLLOUT;
     }
     if (pevents != chan->eevents) {
@@ -368,7 +362,6 @@ tcp_chan_t *tcp_connect(zl_loop_t *loop, const char *ip, unsigned port)
     set_tcp_nodelay(chan->fd, 1);
     //set_socket_send_buf_size(chan->fd, 8192);
     chan->rcv_buf = nbuf_new1(TCP_CHAN_RCV_BUF_SIZE);
-    chan->snd_buf = nbuf_new1(TCP_CHAN_SND_BUF_SIZE);
 
     chan->flags |= TCP_CHAN_CONNECTING;
     addr = (struct sockaddr_in*)&chan->addr;
@@ -419,8 +412,7 @@ void tcp_chan_attach(tcp_chan_t *chan, zl_loop_t *loop)
     chan->flags &= ~TCP_CHAN_IN_EVENT_CB;
     /* check deferred close */
     if (chan->loop && (chan->flags & TCP_CHAN_CLOSING)) {
-        if (nbuf_empty(chan->snd_buf))
-            tcp_chan_close(chan, 0);
+        tcp_chan_close(chan, 0);
     }
 }
 
