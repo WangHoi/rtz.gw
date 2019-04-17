@@ -199,34 +199,26 @@ int nbuf_reserve(nbuf_t *buf, struct iovec *iov, int *iov_cnt)
 
     int size;
     int n = 1;
-    struct nbuf_chunk *c;
-    if (list_empty(&buf->chunk_list)) {
+    struct nbuf_chunk *c = get_last_chunk(buf);
+    if (!c) {
         c = nbuf_chunk_new(buf);
         iov[0].iov_base = c->data;
         iov[0].iov_len = buf->chunk_capacity;
         size = iov[0].iov_len;
     } else {
-        c = list_entry(buf->chunk_list.prev, struct nbuf_chunk, link);
-        if (c->tail == buf->chunk_capacity) {
-            c = nbuf_chunk_new(buf);
-            iov[0].iov_base = c->data;
-            iov[0].iov_len = buf->chunk_capacity;
-            size = iov[0].iov_len;
-        } else if (c->tail == 0) {
-            iov[0].iov_base = c->data;
-            iov[0].iov_len = buf->chunk_capacity;
-            size = iov[0].iov_len;
-        } else {
-            iov[0].iov_base = c->data + c->tail;
-            iov[0].iov_len = buf->chunk_capacity - c->tail;
-            size = iov[0].iov_len;
-            if (*iov_cnt >= 2) {
-                ++n;
+        assert(c->tail < buf->chunk_capacity);
+        iov[0].iov_base = c->data + c->tail;
+        iov[0].iov_len = buf->chunk_capacity - c->tail;
+        size = iov[0].iov_len;
+        if (*iov_cnt >= 2 && size < buf->chunk_capacity / 4) {
+            ++n;
+            if (c->link.next != &buf->chunk_list)
+                c = list_entry(c->link.next, struct nbuf_chunk, link);
+            else
                 c = nbuf_chunk_new(buf);
-                iov[1].iov_base = c->data;
-                iov[1].iov_len = buf->chunk_capacity;
-                size += iov[1].iov_len;
-            }
+            iov[1].iov_base = c->data;
+            iov[1].iov_len = buf->chunk_capacity;
+            size += iov[1].iov_len;
         }
     }
     *iov_cnt = n;
