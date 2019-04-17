@@ -1,11 +1,10 @@
-#include "http_hooks.h"
+﻿#include "http_hooks.h"
 #include "event_loop.h"
 #include "tcp_chan.h"
 #include "log.h"
 #include "sbuf.h"
 #include "macro_util.h"
 #include "net/http_types.h"
-#include "net/tcp_simple_writer.h"
 #include <stdlib.h>
 #include <string.h>
 #include <cJSON.h>
@@ -20,7 +19,6 @@ extern const char *HTTP_HOOKS_URL;
 struct http_hook_ctx {
     zl_loop_t *loop;
     tcp_chan_t *chan;
-    tcp_simple_writer_t *chan_writer;
     int timer;
 
     sbuf_t *response_buf;
@@ -32,7 +30,6 @@ struct http_hook_ctx {
 };
 
 static void http_fd_read_handler(tcp_chan_t *chan, void *udata);
-static void http_fd_sent_handler(tcp_chan_t *chan, void *udata);
 static void http_fd_event_handler(tcp_chan_t *chan, int status, void *udata);
 static void http_fd_event_handler(tcp_chan_t *chan, int status, void *udata);
 static int parse_url(const char *url, char *ip, unsigned *port, const char **path);
@@ -61,7 +58,7 @@ void http_hook_query(zl_loop_t *loop, const char *body,
         free(ctx);
         return;
     }
-    tcp_chan_set_cb(ctx->chan, http_fd_read_handler, http_fd_sent_handler, http_fd_event_handler, ctx);
+    tcp_chan_set_cb(ctx->chan, http_fd_read_handler, NULL, http_fd_event_handler, ctx);
     ctx->loop = loop;
     ctx->timer = zl_timer_start(loop, HTTP_HOOK_TIMEOUT_MSECS, 0, timeout_handler, ctx);
     ctx->response_buf = sbuf_new1(1024);
@@ -70,12 +67,6 @@ void http_hook_query(zl_loop_t *loop, const char *body,
     ctx->client_id = client_id;
     ctx->func = func;
     ctx->udata = udata;
-}
-
-void http_fd_sent_handler(tcp_chan_t *chan, void *udata)
-{
-    struct http_hook_ctx *ctx = udata;
-    tcp_simple_writer_sent_notify(ctx->chan_writer);
 }
 
 void http_fd_read_handler(tcp_chan_t *chan, void *udata)
@@ -111,8 +102,6 @@ void http_fd_read_handler(tcp_chan_t *chan, void *udata)
 
 static void http_hook_ctx_del(struct http_hook_ctx *ctx)
 {
-    if (ctx->chan_writer)
-        tcp_simple_writer_del(ctx->chan_writer);
     zl_timer_stop(ctx->loop, ctx->timer);
     tcp_chan_close(ctx->chan, 0);
     sbuf_del(ctx->response_buf);
@@ -125,7 +114,6 @@ static void http_fd_event_handler(tcp_chan_t *chan, int status, void *udata)
     struct http_hook_ctx *ctx = udata;
     if (status > 0) {
         /* Connected, send request */
-        ctx->chan_writer = tcp_simple_writer_new(chan);
         sbuf_t *request = sbuf_newf(
             "POST %s HTTP/1.1\r\n"
             "Host:%s\r\n"
@@ -135,7 +123,7 @@ static void http_fd_event_handler(tcp_chan_t *chan, int status, void *udata)
             "\r\n", ctx->path, RTZ_LOCAL_IP, ctx->body->size);
         sbuf_append(request, ctx->body);
         LLOG(LL_DEBUG, "http client_id=%ld connected, send '%s'", ctx->client_id, request->data);
-        tcp_simple_writer_perform(ctx->chan_writer, request->data, request->size);
+        tcp_chan_write(chan, request->data, request->size);
         sbuf_del(request);
         return;
     }

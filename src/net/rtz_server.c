@@ -12,7 +12,6 @@
 #include "macro_util.h"
 #include "net/tcp_chan.h"
 #include "net/tcp_chan_ssl.h"
-#include "net/tcp_simple_writer.h"
 #include "net/http_hooks.h"
 #include "algo/sha1.h"
 #include "ice.h"
@@ -83,7 +82,7 @@ typedef struct http_peer_t http_peer_t;
 #define TCP_CHAN_READ_BUF_EMPTY tcp_chan_ssl_read_buf_empty
 #define TCP_CHAN_GET_READ_BUF_SIZE tcp_chan_ssl_get_read_buf_size
 #define TCP_CHAN_READ tcp_chan_ssl_read
-//#define TCP_CHAN_WRITE tcp_chan_ssl_write
+#define TCP_CHAN_WRITE tcp_chan_ssl_write
 #else
 #define TCP_SRV_T tcp_srv_t
 #define TCP_SRV_BIND tcp_srv_bind
@@ -98,7 +97,7 @@ typedef struct http_peer_t http_peer_t;
 #define TCP_CHAN_READ_BUF_EMPTY tcp_chan_read_buf_empty
 #define TCP_CHAN_GET_READ_BUF_SIZE tcp_chan_get_read_buf_size
 #define TCP_CHAN_READ tcp_chan_read
-//#define TCP_CHAN_WRITE tcp_chan_write
+#define TCP_CHAN_WRITE tcp_chan_write
 #endif
 
 struct rtz_server_t {
@@ -115,7 +114,6 @@ struct rtz_server_t {
 struct http_peer_t {
     rtz_server_t *srv;
     TCP_CHAN_T *chan;
-    tcp_simple_writer_t *chan_writer;
 
     enum http_parse_state parse_state;
     sbuf_t *parse_buf;
@@ -286,7 +284,6 @@ http_peer_t *http_peer_new(rtz_server_t *srv, TCP_CHAN_T *chan)
     memset(peer, 0, sizeof(http_peer_t));
     peer->srv = srv;
     peer->chan = chan;
-    peer->chan_writer = tcp_simple_writer_new(chan);
     peer->parse_state = HTTP_PARSE_HEADER;
     peer->parse_buf = sbuf_new1(MAX_HTTP_HEADER_SIZE);
     peer->url_path = sbuf_new();
@@ -306,7 +303,6 @@ void http_peer_del(http_peer_t *peer)
             rtz_session_del(s);
         }
     }
-    tcp_simple_writer_del(peer->chan_writer);
     TCP_CHAN_CLOSE(peer->chan, 0);
     sbuf_del(peer->parse_buf);
     sbuf_del(peer->url_path);
@@ -519,7 +515,7 @@ void send_final_reply(http_peer_t *peer, http_status_t status)
                      "\r\n",
                      status, http_strstatus(status));
     if (n > 0) {
-        tcp_simple_writer_perform(peer->chan_writer, s, n);
+        TCP_CHAN_WRITE(peer->chan, s, n);
         free(s);
     }
     peer->flag |= HTTP_PEER_CLOSE_ASAP;
@@ -602,7 +598,7 @@ void send_upgrade_reply(http_peer_t *peer, const char *client_key)
                  "\r\n",
                  status, http_strstatus(status), sec_result);
     if (n > 0) {
-        tcp_simple_writer_perform(peer->chan_writer, s, n);
+        TCP_CHAN_WRITE(peer->chan, s, n);
         free(s);
     }
     sbuf_del(sec_key);
@@ -636,11 +632,8 @@ void send_ws_frame(http_peer_t *peer, int opcode, const void *data, int size)
         header[1] = size;
         n = 2;
     }
-    struct iovec iov[2] = {
-        { header, n },
-        { (void*)data, size },
-    };
-    tcp_simple_writer_performv(peer->chan_writer, iov, 2);
+    TCP_CHAN_WRITE(peer->chan, header, n);
+    TCP_CHAN_WRITE(peer->chan, data, size);
 }
 
 void create_session(http_peer_t *peer, const char *transaction)

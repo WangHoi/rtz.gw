@@ -63,7 +63,6 @@ set(rtz_SRCS
     src/net/rtcp.c
     src/net/tcp_chan_ssl.c
     src/net/http_hooks.c
-    src/net/tcp_simple_writer.c
 	src/cbuf.c
 	src/sbuf.c
 	src/event_loop.c
@@ -159,7 +158,6 @@ set(rtz_bench_SRCS
 	src/net/net_util.c
     src/net/nbuf.c
     src/net/tcp_chan.c
-    src/net/tcp_simple_writer.c
     src/net/http_types.c
     src/net/stun.c
     src/net/rtp.c
