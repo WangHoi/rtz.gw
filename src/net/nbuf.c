@@ -300,3 +300,11 @@ void nbuf_cleanup_free_list_ct()
     }
     free_chunk_list.prev = free_chunk_list.next = NULL;
 }
+
+int nbuf_count_iov_size(struct iovec *iov, int iov_cnt)
+{
+    size_t n = 0;
+    while (iov_cnt--)
+        n += iov[iov_cnt].iov_len;
+    return (int)n;
+}

@@ -1,4 +1,5 @@
 #pragma once
+
 struct iovec;
 typedef struct nbuf_t nbuf_t;
 
@@ -17,6 +18,8 @@ int nbuf_peekv(nbuf_t *buf, struct iovec *iov, int iov_cnt, int *size);
 void nbuf_consume(nbuf_t *buf, int size);
 int nbuf_reserve(nbuf_t *buf, struct iovec *iov, int *iov_cnt);
 void nbuf_commit(nbuf_t *buf, int size);
+
+int nbuf_count_iov_size(struct iovec *iov, int iov_cnt);
 
 void nbuf_init_free_list_ct();
 void nbuf_cleanup_free_list_ct();
