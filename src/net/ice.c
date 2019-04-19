@@ -183,6 +183,7 @@ struct ice_agent_t {
 struct ice_tcp_chan_udata {
     ice_server_t *srv;
     ice_agent_t *agent;
+    int moved;
 };
 
 static ice_stream_t *ice_stream_new(ice_agent_t *handle);
@@ -1099,9 +1100,9 @@ static void move_tcp_chan(zl_loop_t *loop, void *udata)
     tcp_chan_t *chan = udata;
     rtz_server_t *srv = rtz_shard_get_server_ct();
     //LLOG(LL_TRACE, "tcp_chan %p moved", chan);
-    tcp_chan_set_usertag(chan, 1);
     struct ice_tcp_chan_udata *chan_udata = tcp_chan_get_userdata(chan);
     chan_udata->srv = rtz_get_ice_server(srv);
+    chan_udata->moved = 1;
     tcp_chan_attach(chan, loop);
 }
 
@@ -1112,7 +1113,7 @@ void ice_tcp_data_handler(tcp_chan_t *chan, void *udata)
     int qlen = tcp_chan_get_read_buf_size(chan);
     int size;
 
-    if (!tcp_chan_get_usertag(chan)) {
+    if (!chan_udata->moved) {
         if (qlen >= 2) {
             tcp_chan_peek(chan, data, 2);
             size = (data[0] << 8) | data[1];
@@ -1135,7 +1136,7 @@ void ice_tcp_data_handler(tcp_chan_t *chan, void *udata)
                             zl_invoke(expect_loop, move_tcp_chan, chan);
                         return;
                     } else {
-                        tcp_chan_set_usertag(chan, 1);
+                        chan_udata->moved = 1;
                     }
                 }
             }

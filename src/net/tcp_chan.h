@@ -48,5 +48,3 @@ void tcp_chan_detach(tcp_chan_t *chan);
  * @note Will re-trigger event cb.
  */
 void tcp_chan_attach(tcp_chan_t *chan, zl_loop_t *loop);
-void tcp_chan_set_usertag(tcp_chan_t *chan, int tag);
-int tcp_chan_get_usertag(tcp_chan_t *chan);

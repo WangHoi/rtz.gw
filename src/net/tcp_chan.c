@@ -45,7 +45,6 @@ struct tcp_chan_t {
     void *udata;
     int eevents;
     int flags;
-    int utag; /* usertag */
 };
 
 static void srv_fd_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata);
@@ -422,13 +421,4 @@ void tcp_chan_attach(tcp_chan_t *chan, zl_loop_t *loop)
         if (nbuf_empty(chan->snd_buf))
             tcp_chan_close(chan, 0);
     }
-}
-
-void tcp_chan_set_usertag(tcp_chan_t *chan, int tag)
-{
-    chan->utag = tag;
-}
-int tcp_chan_get_usertag(tcp_chan_t *chan)
-{
-    return chan->utag;
 }
