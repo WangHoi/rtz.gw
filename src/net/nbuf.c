@@ -212,10 +212,12 @@ int nbuf_reserve(nbuf_t *buf, struct iovec *iov, int *iov_cnt)
         size = iov[0].iov_len;
         if (*iov_cnt >= 2 && size < buf->chunk_capacity / 4) {
             ++n;
-            if (c->link.next != &buf->chunk_list)
+            if (c->link.next != &buf->chunk_list) {
                 c = list_entry(c->link.next, struct nbuf_chunk, link);
-            else
+                assert(c->tail == 0);
+            } else {
                 c = nbuf_chunk_new(buf);
+            }
             iov[1].iov_base = c->data;
             iov[1].iov_len = buf->chunk_capacity;
             size += iov[1].iov_len;
