@@ -1,4 +1,4 @@
-﻿#include "tcp_chan.h"
+#include "tcp_chan.h"
 #include "nbuf.h"
 #include "net_util.h"
 #include "event_loop.h"
@@ -286,7 +286,7 @@ write_again:
             } else if (n == -1) {
                 if (errno == EINTR) {
                     LLOG(LL_TRACE, "EINTR");
-                    /*goto write_again;*/
+                    goto write_again;
                 }
                 if (errno != EAGAIN) {
                     LLOG(LL_ERROR, "write fd %d error: %s.", fd, strerror(errno));
