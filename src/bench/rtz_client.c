@@ -164,7 +164,7 @@ void rtz_client_del(rtz_client_t *client)
 
 void rtz_client_open(rtz_client_t *client, const char *ip, int port)
 {
-    client->chan = tcp_connect(client->loop, ip, port);
+    client->chan = tcp_chan_connect(client->loop, ip, port);
     tcp_chan_set_cb(client->chan, rtz_client_data_handler, NULL, rtz_client_event_handler, client);
 }
 
@@ -393,7 +393,7 @@ void handle_event(rtz_client_t *client, const char *transaction,
     if (!strcasecmp(status, "preparing")) {
         sbuf_strcpy(client->handle_id, handle_id);
         process_sdp_offer(client, sdp_offer);
-        client->media_chan = tcp_connect(client->loop, client->ice_rip->data, client->ice_rport);
+        client->media_chan = tcp_chan_connect(client->loop, client->ice_rip->data, client->ice_rport);
         tcp_chan_set_cb(client->media_chan, rtz_media_data_handler, NULL,
                         rtz_media_event_handler, client);
         sbuf_t *sdp_answer = create_sdp(client, 1);

@@ -353,7 +353,7 @@ void srv_fd_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata)
     srv->accept_cb(srv, chan, srv->udata);
 }
 
-tcp_chan_t *tcp_connect(zl_loop_t *loop, const char *ip, unsigned port)
+tcp_chan_t *tcp_chan_connect(zl_loop_t *loop, const char *ip, unsigned port)
 {
     struct sockaddr_in *addr;
     int ret;

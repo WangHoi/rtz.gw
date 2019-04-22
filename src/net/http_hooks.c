@@ -1,4 +1,4 @@
-﻿#include "http_hooks.h"
+#include "http_hooks.h"
 #include "event_loop.h"
 #include "tcp_chan.h"
 #include "log.h"
@@ -52,7 +52,7 @@ void http_hook_query(zl_loop_t *loop, const char *body,
     }
     struct http_hook_ctx *ctx = malloc(sizeof(struct http_hook_ctx));
     memset(ctx, 0, sizeof(struct http_hook_ctx));
-    ctx->chan = tcp_connect(loop, ip, port);
+    ctx->chan = tcp_chan_connect(loop, ip, port);
     if (!ctx->chan) {
         LLOG(LL_ERROR, "connect to %s:%u error", ip, port);
         free(ctx);

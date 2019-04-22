@@ -221,6 +221,9 @@ static inline void list_splice_init(struct list_head *list,
 #define list_entry(ptr, type, member) \
 	container_of(ptr, type, member)
 
+#define list_first_entry(ptr, type, member) \
+    list_entry((ptr)->next, type, member)
+
 /**
  * list_for_each	-	iterate over a list
  * @pos:	the &struct list_head to use as a loop counter.

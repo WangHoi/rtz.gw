@@ -18,7 +18,7 @@ int tcp_srv_bind(tcp_srv_t *srv, const char *ip, unsigned short port);
 int tcp_srv_listen(tcp_srv_t *srv);
 void tcp_srv_del(tcp_srv_t *srv);
 
-tcp_chan_t *tcp_connect(zl_loop_t *loop, const char *ip, unsigned port);
+tcp_chan_t *tcp_chan_connect(zl_loop_t *loop, const char *ip, unsigned port);
 
 tcp_chan_t *tcp_chan_accept(zl_loop_t *loop, int listenfd);
 void tcp_chan_set_cb(tcp_chan_t *chan, tcp_chan_buffer_cb read_cb,

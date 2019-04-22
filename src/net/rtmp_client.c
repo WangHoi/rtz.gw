@@ -236,7 +236,7 @@ void rtmp_client_tcp_connect(rtmp_client_t *client, zl_defer_cb func)
         return;
     }
 
-    client->chan = tcp_connect(client->loop, client->ip->data, client->port);
+    client->chan = tcp_chan_connect(client->loop, client->ip->data, client->port);
     tcp_chan_set_cb(client->chan, rtmp_client_data_handler, NULL, rtmp_client_event_handler, client);
 }
 
