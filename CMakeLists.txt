@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 project(rtz.gw C ASM)
-set(RTZ_VERSION "0.2.0")
+set(RTZ_VERSION "0.2.1")
 
 set(OPENSSL_ROOT_DIR 3rdparty/openssl-1.1.0j)
 set(OPENSSL_INCLUDE_DIRS ${OPENSSL_ROOT_DIR}/include)
@@ -19,6 +19,7 @@ add_subdirectory(3rdparty/cJSON-1.7.10)
 option(WITH_HTTP_HOOKS "enable http hooks" OFF)
 option(WITH_WSS "enable signal server WSS mode" OFF)
 option(WITH_ASAN "enable address sanitizer" OFF)
+option(WITH_TSAN "enable thread sanitizer" OFF)
 option(WITH_TCMALLOC "link with tcmalloc" OFF)
 option(WITH_ZOOKEEPER "enable zookeeper integration" OFF)
 
@@ -63,6 +64,7 @@ set(rtz_SRCS
     src/net/rtcp.c
     src/net/tcp_chan_ssl.c
     src/net/http_hooks.c
+    src/net/monitor_server.c
 	src/cbuf.c
 	src/sbuf.c
 	src/event_loop.c
@@ -101,6 +103,9 @@ endif()
 if(WITH_ASAN)
     add_definitions(-fsanitize=address)
     target_link_libraries(rtz.gw asan)
+elseif(WITH_TSAN)
+    add_definitions(-fsanitize=thread)
+    target_link_libraries(rtz.gw tsan)
 endif()
 if(WITH_TCMALLOC)
     target_link_libraries(rtz.gw tcmalloc_and_profiler)
@@ -125,13 +130,11 @@ install(TARGETS rtz.gw DESTINATION /app/avideo)
 install(FILES
     dist/rtz.pem
     dist/rtz.key
-    dist/rtz.internal-dev.conf
-    dist/rtz.internal-test.conf
-    dist/rtz.aliyun-demo.conf
-    dist/rtz.aliyun-tob.conf
+    dist/rtz.aliyun-tob.conf.sample
     DESTINATION /app/avideo)
 install(FILES dist/70-rtz.gw.conf DESTINATION /etc/rsyslog.d)
 install(FILES dist/rtz.gw@.service DESTINATION /etc/systemd/system)
+install(FILES dist/rtz.logrotate DESTINATION /etc/logrotate.d RENAME rtz)
 
 set(CPACK_GENERATOR "DEB")
 set(CPACK_SOURCE_GENERATOR "TXZ")
@@ -181,6 +184,9 @@ add_executable(rtz_bench ${rtz_bench_SRCS})
 if(WITH_ASAN)
     add_definitions(-fsanitize=address)
     target_link_libraries(rtz_bench asan)
+elseif(WITH_TSAN)
+    add_definitions(-fsanitize=thread)
+    target_link_libraries(rtz_bench tsan)
 endif()
 if(WITH_TCMALLOC)
     target_link_libraries(rtz_bench tcmalloc_and_profiler)

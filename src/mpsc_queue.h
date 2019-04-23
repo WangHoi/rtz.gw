@@ -2,7 +2,7 @@
 #include <stdint.h>
 
 struct mpsc_msg {
-	uint32_t id;
+	volatile uint32_t id;
 	union __attribute__((packed)) {
 		uint8_t u8[60];
 		uint16_t u16[30];

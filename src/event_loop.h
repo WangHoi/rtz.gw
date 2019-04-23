@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <sys/epoll.h>
 
 #define ZL_USEC_PER_SEC 1000000

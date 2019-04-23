@@ -13,3 +13,4 @@ rtz_server_t *rtz_shard_get_server_ct();
 zl_loop_t *rtz_shard_get_loop(int idx);
 zl_loop_t *rtz_shard_get_control_loop();
 int rtz_get_total_load();
+void rtz_kick_stream(const char *tc_url, const char *stream);

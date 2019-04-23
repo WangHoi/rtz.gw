@@ -1254,6 +1254,37 @@ void *rtz_get_ice_server(rtz_server_t *srv)
     return srv->ice_srv;
 }
 
+void rtz_server_kick_stream(rtz_server_t *srv, const char *tc_url, const char *stream_name)
+{
+    if (!srv)
+        return;
+    rtz_handle_t *h, *tmp;
+    rtz_stream_t *stream = find_stream(srv, stream_name);
+    if (!stream)
+        return;
+    list_for_each_entry_safe(h, tmp, &stream->handle_list, stream_link) {
+        if (!strcmp(h->tc_url->data, tc_url)) {
+            LLOG(LL_INFO, "handle %p kicked, leave stream %p(%s)",
+                h, stream, stream->stream_name->data);
+            h->stream = NULL;
+            list_del(&h->stream_link);
+            if (h->ice) {
+                {
+                    cJSON *json = cJSON_CreateObject();
+                    cJSON_AddStringToObject(json, "type", "destroyed");
+                    cJSON_AddStringToObject(json, "session_id", h->session->id->data);
+                    cJSON_AddStringToObject(json, "sender", h->id->data);
+                    send_json(h->session->peer, json);
+                    cJSON_Delete(json);
+                }
+                ice_webrtc_hangup(h->ice, "Kick");
+                rtz_handle_del(h);
+            }
+            break;
+        }
+    }
+}
+
 /* Write 12 bit min_playout_delay in 10ms granularity */
 static inline void update_playout_delay_ext(uint8_t *ext, uint16_t min_delay)
 {

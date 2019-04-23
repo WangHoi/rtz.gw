@@ -39,8 +39,8 @@ struct mpsc_msg *mpsc_reserve(struct mpsc_queue *q)
 	while (1) {
 		// Check for potential overflow
 		unsigned s = q->buf->size;
-		unsigned r = q->buf->head;
-		unsigned w = q->buf->tail;
+        unsigned r = ATOMIC_LOAD_RELAXED(&q->buf->head);
+		unsigned w = ATOMIC_LOAD(&q->buf->tail);
 		if ((w - r) > (s - write_size)) return NULL;
 
 		// Point to the newly allocated space
@@ -62,7 +62,7 @@ void mpsc_commit(struct mpsc_msg *msg, uint32_t id)
 	WRITE_FENCE;
 
 	// Setting the message ID signals to the consumer that the message is ready
-	msg->id = id;
+	ATOMIC_STORE(&msg->id, id);
 }
 
 struct mpsc_msg *mpsc_peek(struct mpsc_queue *q)
@@ -76,7 +76,7 @@ struct mpsc_msg *mpsc_peek(struct mpsc_queue *q)
 	// Messages behind this one may have been commit but it's not reachable until
 	// the next one in the queue is ready.
 	ptr = (struct mpsc_msg*)cbuf_head(q->buf);
-	if (ptr->id)
+	if (ATOMIC_LOAD(&ptr->id))
 		return ptr;
 
 	return NULL;
@@ -97,6 +97,6 @@ void mpsc_consume(struct mpsc_queue *q, struct mpsc_msg *msg)
 
 	// Ensure clear completes before advancing the read position
 	WRITE_FENCE;
-	q->buf->head += sizeof(struct mpsc_msg);
+    ATOMIC_ADD_RELAXED(&q->buf->head, sizeof(struct mpsc_msg));
 }
 

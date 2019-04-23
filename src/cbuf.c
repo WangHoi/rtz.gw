@@ -4,14 +4,14 @@
  * Use of this source code is governed by a BSD-style license that can be
  * found in the LICENSE file.
  */
-
+#include "cbuf.h"
+#include "macro_util.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#include "cbuf.h"
 
 #define fail() assert(0)
 
@@ -76,7 +76,7 @@ void cbuf_del(cbuf_t *me)
 
 int cbuf_is_empty(const cbuf_t *me)
 {
-	return me->head == me->tail;
+	return me->head == ATOMIC_LOAD(&me->tail);
 }
 
 int cbuf_is_full(const cbuf_t *me)

@@ -1,0 +1,7 @@
+/var/log/rtz*.log {
+	weekly
+	rotate 5
+	maxage 60
+	missingok
+	copytruncate
+}

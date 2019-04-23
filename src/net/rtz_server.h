@@ -61,3 +61,4 @@ void rtz_update_stats(void *rtz_handle, int recv_bytes, int sent_bytes);
 int rtz_get_load(rtz_server_t *srv);
 
 void *rtz_get_ice_server(rtz_server_t *srv);
+void rtz_server_kick_stream(rtz_server_t *srv, const char *tc_url, const char *stream);
