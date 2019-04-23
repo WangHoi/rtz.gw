@@ -142,6 +142,7 @@ set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Wang Hoi")
 set(CPACK_PACKAGE_VERSION ${RTZ_VERSION})
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "libgoogle-perftools4 (>= 2.4-0)")
 set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA "${CMAKE_CURRENT_SOURCE_DIR}/dist/postinst;${CMAKE_CURRENT_SOURCE_DIR}/dist/prerm;${CMAKE_CURRENT_SOURCE_DIR}/dist/postrm;")
+set(CPACK_SOURCE_IGNORE_FILES "/build/;/\.git/;/\.gitignore;/.*\.tmp")
 include(CPack)
 
 ################################################################################
