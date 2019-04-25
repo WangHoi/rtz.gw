@@ -60,8 +60,7 @@ rtz.init = function(options) {
 };
 
 rtz.isWebrtcSupported = function() {
-	return window.RTCPeerConnection !== undefined && window.RTCPeerConnection !== null &&
-		navigator.getUserMedia !== undefined && navigator.getUserMedia !== null;
+	return window.RTCPeerConnection !== undefined && window.RTCPeerConnection !== null;
 };
 
 rtz.randomString = function(len) {
