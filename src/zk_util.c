@@ -58,7 +58,7 @@ static const char *RTZ_EDGE_SERVICE_NAME_PREFIX = "/avideo/srs/edge/";
 static const int RECV_TIMEOUT_MSECS = 30000;
 static const int UPDATE_TIMEOUT_MSECS = 10000;
 
-static char rtz_edge_service_name[1024];
+static char rtz_edge_service_name[4096];
 
 static void zk_watch(zhandle_t *zzh, int type, int state, const char *path, void* ctx);
 static void zk_mkdir(zhandle_t *handle, const char *service_name, sbuf_t *real_path,
@@ -165,6 +165,7 @@ void zk_update(zhandle_t *handle, const char *real_path,
     int ret = zoo_set(handle, real_path, text, strlen(text), -1);
     if (ret != ZOK) {
         LLOG(LL_ERROR, "zoo_set error %d", ret);
+        connected = 0;
     } else {
         //LLOG(LL_TRACE, "zoo_set ok");
     }
@@ -172,6 +173,16 @@ void zk_update(zhandle_t *handle, const char *real_path,
 
 void zk_timeout_handler(zl_loop_t *loop, int id, void *udata)
 {
+    if (!connected) {
+        sbuf_clear(rtz_real_path);
+        if (handle)
+            zookeeper_close(handle);
+        handle = zookeeper_init2(ZK_HOST, &zk_watch, RECV_TIMEOUT_MSECS, NULL, (void *)&connected, 0, zk_log_handler);
+        zk_mkdir(handle, rtz_edge_service_name, rtz_real_path,
+            RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT,
+            RTZ_LOCAL_IP, RTMP_LOCAL_PORT);
+    }
+
     if (connected)
         zk_update(handle, rtz_real_path->data,
                   RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT,
@@ -182,6 +193,7 @@ void zk_log_handler(const char *message)
 {
     llog_raw(message, 1);
 }
+
 #else
 void start_zk_registry(zl_loop_t *loop)
 {
