@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 project(rtz.gw C ASM)
-set(RTZ_VERSION "0.2.1")
+set(RTZ_VERSION "0.2.2_dev")
 
 set(OPENSSL_ROOT_DIR 3rdparty/openssl-1.1.0j)
 set(OPENSSL_INCLUDE_DIRS ${OPENSSL_ROOT_DIR}/include)
@@ -22,6 +22,8 @@ option(WITH_ASAN "enable address sanitizer" OFF)
 option(WITH_TSAN "enable thread sanitizer" OFF)
 option(WITH_TCMALLOC "link with tcmalloc" OFF)
 option(WITH_ZOOKEEPER "enable zookeeper integration" OFF)
+
+add_definitions(-Wall -Wextra -Wno-unused-variable -Wno-unused-parameter -Wno-unused-function)
 
 if(PkgConfig_FOUND)
     pkg_check_modules(SYSTEMD libsystemd)
@@ -48,6 +50,8 @@ set(rtz_SRCS
     src/media/g711.c
     src/media/rtp_demux.c
     src/media/rtp_mux.c
+    src/media/fmp4_mux.c
+    src/media/flac_util.c
 	src/net/net_util.c
     src/net/nbuf.c
     src/net/tcp_chan.c
@@ -60,6 +64,7 @@ set(rtz_SRCS
     src/net/ice.c
     src/net/dtls.c
     src/net/dtls_bio.c
+    src/net/hls_server.c
     src/net/rtp.c
     src/net/rtcp.c
     src/net/tcp_chan_ssl.c

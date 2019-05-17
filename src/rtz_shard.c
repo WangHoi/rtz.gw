@@ -1,6 +1,7 @@
 #include "rtz_shard.h"
 #include "net/rtz_server.h"
 #include "net/monitor_server.h"
+#include "net/hls_server.h"
 #include "net/nbuf.h"
 #include "event_loop.h"
 #include "macro_util.h"
@@ -20,6 +21,7 @@ struct rtz_shard_t {
     int idx;
     zl_loop_t *loop;
     rtz_server_t *rtz_srv;
+    hls_server_t *hls_srv;
     int load;
 };
 
@@ -30,6 +32,7 @@ struct rtz_kick_udata {
 
 extern int RTZ_SHARDS;
 extern int RTZ_LOCAL_SIGNAL_PORT;
+extern int RTZ_LOCAL_HLS_PORT;
 extern int RTZ_MONITOR_PORT;
 static rtz_shard_t *rtz_shards[MAX_RTZ_SHARDS] = {};
 static __thread int rtz_shard_index_ct = -1;
@@ -84,7 +87,7 @@ rtz_server_t *rtz_shard_get_server_ct()
 
 zl_loop_t *rtz_shard_get_loop(int idx)
 {
-    if (idx >= 0 && idx < ARRAY_SIZE(rtz_shards)
+    if (idx >= 0 && idx < (int)ARRAY_SIZE(rtz_shards)
         && rtz_shards[idx])
         return rtz_shards[idx]->loop;
     return NULL;
@@ -161,6 +164,10 @@ void *shard_entry(void *arg)
     rtz_server_bind(d->rtz_srv, RTZ_LOCAL_SIGNAL_PORT);
     rtz_server_start(d->rtz_srv);
 
+    d->hls_srv = hls_server_new(d->loop);
+    hls_server_bind(d->hls_srv, RTZ_LOCAL_HLS_PORT);
+    hls_server_start(d->hls_srv);
+
     pthread_barrier_wait(&d->start_barrier);
 
     while (!zl_loop_stopped(d->loop)) {
@@ -168,14 +175,16 @@ void *shard_entry(void *arg)
     }
 
     LLOG(LL_INFO, "shard %d stopping...", d->idx);
+    hls_server_stop(d->hls_srv);
     rtz_server_stop(d->rtz_srv);
 
     long long ts = zl_timestamp();
     do {
         zl_poll(d->loop, 100);
-    } while (ts + 5000 > zl_timestamp());
+    } while (ts + 1000 > zl_timestamp());
 
     rtz_server_del(d->rtz_srv);
+    hls_server_del(d->hls_srv);
     d->rtz_srv = NULL;
 
     nbuf_cleanup_free_list_ct();
@@ -191,13 +200,16 @@ void *shard_entry(void *arg)
 
 void stop_shard(zl_loop_t *loop, void *udata)
 {
+    UNUSED(udata);
+
     zl_stop(loop);
 }
 
 void after_stop_shard(zl_loop_t *loop, void *udata)
 {
+    UNUSED(loop);
+
     rtz_shard_t *d = udata;
-    int ret;
     shards_stopping = 1;
     LLOG(LL_INFO, "joining shard %d thread...", d->idx);
     pthread_join(d->tid, NULL);
@@ -207,6 +219,8 @@ void after_stop_shard(zl_loop_t *loop, void *udata)
 
 void get_shard_load(zl_loop_t *loop, void *udata)
 {
+    UNUSED(loop);
+
     rtz_shard_t *cur_shard = rtz_shards[rtz_shard_index_ct];
     cur_shard->load = rtz_get_load(cur_shard->rtz_srv);
 
@@ -223,6 +237,8 @@ void get_shard_load(zl_loop_t *loop, void *udata)
 
 void kick_stream(zl_loop_t *loop, void *udata)
 {
+    UNUSED(loop);
+
     struct rtz_kick_udata *kick_udata = udata;
     rtz_shard_t *cur_shard = rtz_shards[rtz_shard_index_ct];
     rtz_server_kick_stream(cur_shard->rtz_srv, kick_udata->tc_url->data, kick_udata->stream->data);
@@ -239,6 +255,8 @@ void kick_stream(zl_loop_t *loop, void *udata)
 
 void update_total_load(zl_loop_t *loop, void *udata)
 {
+    UNUSED(loop);
+
     rtz_total_load = (intptr_t)udata;
 
     char text[1024];
