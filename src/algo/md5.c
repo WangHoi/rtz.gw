@@ -34,9 +34,10 @@ void MD5Init(MD5_CTX *ctx)
  * Update context to reflect the concatenation of another buffer full
  * of bytes.
  */
-void MD5Update(MD5_CTX *ctx, uint8_t const *buf, unsigned len)
+void MD5Update(MD5_CTX *ctx, void const *buf_, unsigned len)
 {
-	uint32_t t;
+    uint8_t const *buf = buf_;
+    uint32_t t;
 
 	/* Update byte count */
 

@@ -448,7 +448,7 @@ void stun_handler(ice_server_t *srv, const void *data, int size,
             return;
         }
         char username[ICE_MAX_USERNAME_LENGTH], username_mirror[ICE_MAX_USERNAME_LENGTH];
-        char ufrag1[ICE_MAX_USERNAME_LENGTH], ufrag2[ICE_MAX_USERNAME_LENGTH];
+        char ufrag1[ICE_MAX_USERNAME_LENGTH / 2], ufrag2[ICE_MAX_USERNAME_LENGTH / 2];
         if (attr_len < ICE_MAX_USERNAME_LENGTH) {
             memcpy(username, stun_attr_varsize_read((stun_attr_varsize_t*)attr_hdr), attr_len);
             username[attr_len] = 0;
@@ -488,7 +488,7 @@ void stun_handler(ice_server_t *srv, const void *data, int size,
             agent->cand_state = ICE_CAND_STATE_VALID;
         //LLOG(LL_TRACE, "update cand state to %s",
         //    (agent->cand_state == ICE_CAND_STATE_VALID) ? "VALID" : "NOMINATED");
-        sprintf(username_mirror, "%s:%s", ufrag2, ufrag1);
+        snprintf(username_mirror, sizeof(username_mirror), "%s:%s", ufrag2, ufrag1);
 
         // STUN Response
         stun_msg_hdr_init(reply_msg_hdr, STUN_BINDING_RESPONSE, msg_hdr->tsx_id);

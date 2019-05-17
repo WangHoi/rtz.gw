@@ -61,7 +61,12 @@ struct rtmp_client_t {
     unsigned short port;
     sbuf_t *app;
     sbuf_t *stream;
-    rtz_stream_t *rtz_stream;
+
+    void* udata;
+    rtmp_packet_cb audio_cb;
+    rtmp_packet_cb video_cb;
+    rtmp_video_codec_cb video_codec_cb;
+    rtmp_metadata_cb metadata_cb;
 
     rtmp_handshake_state_t hstate;
     rtmp_parse_state_t pstate;
@@ -85,7 +90,6 @@ struct rtmp_client_t {
     float sframe_time;
     int64_t last_video_ts;
 
-    void *udata;
     long long connect_timestamp;
 
     //int vcodec_changed;
@@ -129,7 +133,6 @@ static void event_handler(rtmp_client_t *peer, rtmp_event_type_t type,
 static void command_handler(rtmp_client_t *peer, unsigned channel, const char *cmd,
                             unsigned tx_id, const char *data, int size);
 static void metadata_handler(rtmp_client_t *peer, const char *data, int size);
-static void recv_handler(rtmp_client_t *client, const char *data, int size);
 static void chunk_handler(rtmp_client_t *client);
 static void send_connect(rtmp_client_t *client, zl_defer_cb ucb);
 static void send_create_stream(rtmp_client_t *client, zl_defer_cb ucb);
@@ -137,7 +140,7 @@ static void send_release_stream(rtmp_client_t *client, zl_defer_cb ucb);
 static void send_fcpublish(rtmp_client_t *client, zl_defer_cb ucb);
 static void send_publish(rtmp_client_t *client, zl_defer_cb ucb);
 static void send_play(rtmp_client_t *client, zl_defer_cb ucb);
-static void send_video(rtmp_client_t *client, uint32_t timestamp, const void *data, int size);
+//static void send_video(rtmp_client_t *client, uint32_t timestamp, const void *data, int size);
 static int is_publish_status(int64_t status);
 static void finish_requests(rtmp_client_t *client, unsigned tx_id, int64_t status);
 static rtmp_status_t convert_to_status(const char *data, size_t size);
@@ -151,7 +154,6 @@ rtmp_client_t *rtmp_client_new(zl_loop_t *loop)
     rtmp_client_t *client = malloc(sizeof(rtmp_client_t));
     memset(client, 0, sizeof(rtmp_client_t));
     client->loop = loop;
-    client->udata = client;
     client->uri = sbuf_new1(RTMP_CLIENT_URI_SIZE);
     client->ip = sbuf_new1(RTMP_CLIENT_IP_SIZE);
     client->app = sbuf_new();
@@ -170,12 +172,10 @@ rtmp_client_t *rtmp_client_new(zl_loop_t *loop)
     INIT_LIST_HEAD(&client->request_list);
     return client;
 }
-/*
 void rtmp_client_set_userdata(rtmp_client_t *client, void *udata)
 {
     client->udata = udata;
 }
-*/
 void rtmp_client_del(rtmp_client_t *client)
 {
     if (client->chan) {
@@ -345,12 +345,6 @@ void rtmp_client_abort(rtmp_client_t *client)
     */
 }
 
-void rtmp_client_set_rtz_stream(rtmp_client_t *client, void *rtz_stream)
-{
-    client->rtz_stream = rtz_stream;
-}
-
-/*
 void rtmp_client_set_video_packet_cb(rtmp_client_t *client, rtmp_packet_cb func)
 {
     client->video_cb = func;
@@ -361,6 +355,16 @@ void rtmp_client_set_audio_packet_cb(rtmp_client_t *client, rtmp_packet_cb func)
     client->audio_cb = func;
 }
 
+void rtmp_client_set_video_codec_cb(rtmp_client_t *client, rtmp_video_codec_cb func)
+{
+    client->video_codec_cb = func;
+}
+
+void rtmp_client_set_metadata_cb(rtmp_client_t *client, rtmp_metadata_cb func)
+{
+    client->metadata_cb = func;
+}
+/*
 void rtmp_client_send_video(rtmp_client_t *client, uint32_t timestamp, const char *data, int size)
 {
     if (client->flag & RTMP_CLIENT_ERROR) {
@@ -484,7 +488,7 @@ void session_handler(rtmp_client_t *client)
                 //LLOG(LL_TRACE, "  chunk size %d limit reached, total %d", peer->chunk_body->size, peer->cur_chunk.body_size);
                 client->pstate = RTMP_PARSE_INIT;
             }
-            if (chunk_body->size == client->cur_chunk.body_size) {
+            if (chunk_body->size == (int)client->cur_chunk.body_size) {
                 //log_info ("buffer_size={} hdr_size={} body_size={}", _buffer.size (), _chunk_header.header_size, _chunk_header.body_size);
                 chunk_handler(client);
                 sbuf_clear(chunk_body);
@@ -598,7 +602,7 @@ void chunk_handler(rtmp_client_t *client)
                     int frame_cnt = 0;
                     while (psize > 4) {
                         uint32_t nalu_size = unpack_be32(p);
-                        if (4 + nalu_size <= psize && nalu_size > 0) {
+                        if (4 + (int)nalu_size <= psize && nalu_size > 0) {
                             unsigned nalu_type = p[4] & 0x1f;
                             if (nalu_type == 5 || nalu_type == 1) {
                                 if (nalu_type == 5) {
@@ -1160,9 +1164,10 @@ void audio_handler(rtmp_client_t *peer, int64_t timestamp, const char *data, int
 
     if (sound_format == FLV_AUDIO_CODEC_PCMA) {
         ++peer->audio_counter;
-        uint32_t rtp_ts = (uint32_t)(timestamp * 8);
+        //uint32_t rtp_ts = (uint32_t)(timestamp * 8);
         //LLOG(LL_TRACE, "audio ts=%ld size=%d", timestamp, size - 1);
-        rtz_stream_push_audio(peer->rtz_stream, rtp_ts, data + 1, size - 1);
+        //rtz_stream_push_audio(peer->rtz_stream, rtp_ts, data + 1, size - 1);
+        peer->audio_cb(timestamp, (size - 1) / 8, 1, data + 1, size - 1, peer->udata);
     }
 }
 
@@ -1204,17 +1209,18 @@ void video_nalu_handler(rtmp_client_t *peer, int64_t timestamp, const char *data
         }
     }
     */
-    uint32_t rtp_ts = (uint32_t)(timestamp * 90);
+    //uint32_t rtp_ts = (uint32_t)(timestamp * 90);
     int key_frame = (nalu_type == H264_NALU_IFRAME);
-    rtz_stream_push_video(peer->rtz_stream, rtp_ts, peer->sframe_time, key_frame, data, size);
+    //rtz_stream_push_video(peer->rtz_stream, rtp_ts, peer->sframe_time, key_frame, data, size);
+    peer->video_cb(timestamp, peer->sframe_time, key_frame, data, size, peer->udata);
 }
 
 void video_avc_handler(rtmp_client_t *peer, int64_t timestamp, const char *data, int size)
 {
     //LLOG(LL_TRACE, "got avc.%02hhx%02hhx%02hhx audio type=%d", data[1], data[2], data[3], peer->acodec->type);
-    if (peer->rtz_stream) {
-        rtz_stream_set_video_codec_h264(peer->rtz_stream, data, size);
-
+    if (peer->udata) {
+        //rtz_stream_set_video_codec_h264(peer->rtz_stream, data, size);
+        peer->video_codec_cb(data, size, peer->udata);
         /*
         if (peer->acodec->type == AUDIO_CODEC_PCMA) {
             uint8_t dfla[4 + FLAC_METADATA_STREAMINFO_SIZE];
@@ -1258,6 +1264,7 @@ void metadata_handler(rtmp_client_t *peer, const char *data, int size)
     int i = 0;
     video_codec_reset(peer->vcodec);
     audio_codec_reset(peer->acodec);
+    double videotime = 0;
     while (p < pend) {
         p += amf0_read_fieldname(p, pend - p, name);
         //LLOG(LL_TRACE, "%s", name->data);
@@ -1323,9 +1330,9 @@ void metadata_handler(rtmp_client_t *peer, const char *data, int size)
         } else if (!strcmp(name->data, "videotime")) {
             if (p[0] == AMF0_TYPE_NUMBER) {
                 p += amf0_read_number(p, pend - p, &num);
+                videotime = num;
                 //LLOG(LL_TRACE, "videotime=%.0lf", num);
-
-                rtz_stream_update_videotime(peer->rtz_stream, num);
+                //rtz_stream_update_videotime(peer->rtz_stream, num);
             }
         } else if (!strcmp(name->data, "systemtime")) {
             if (p[0] == AMF0_TYPE_NUMBER) {
@@ -1348,6 +1355,8 @@ void metadata_handler(rtmp_client_t *peer, const char *data, int size)
     }
     sbuf_del(name);
     sbuf_del(codec_name);
+    if (peer->metadata_cb)
+        peer->metadata_cb(peer->vcodec->type, peer->acodec->type, videotime, peer->udata);
 }
 
 void rtmp_write_handler(const void *data, int size, void *udata)

@@ -205,6 +205,13 @@ static void rtz_server_cron(zl_loop_t *loop, int timerid, void *udata);
 static void rtz_handle_on_play_hook_handler(zl_loop_t *loop, long client_id,
                                             int result, void *udata);
 
+static void rtmp_audio_handler(int64_t timestamp, uint16_t sframe_time,
+    int key_frame, const void *data, int size, void *udata);
+static void rtmp_video_handler(int64_t timestamp, uint16_t sframe_time,
+    int key_frame, const void *data, int size, void *udata);
+static void rtmp_video_codec_handler(const void *data, int size, void *udata);
+static void rtmp_metadata_handler(int vcodec, int acodec, double videotime, void *udata);
+
 rtz_server_t *rtz_server_new(zl_loop_t *loop)
 {
     assert(loop);
@@ -576,7 +583,7 @@ void send_upgrade_reply(http_peer_t *peer, const char *client_key)
 
     sbuf_t *sec_key = sbuf_strdup(client_key);
     sbuf_append1(sec_key, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
-    char sha1[21] = {};
+    unsigned char sha1[21] = {};
     compute_sha1(sec_key->data, sec_key->size, sha1);
     char sec_result[40];
     int n = base64_encode(sha1, 20, NULL, 0);
@@ -710,8 +717,8 @@ void parse_url(rtz_handle_t *h, const char *url)
     } else {
         sbuf_strcpy(h->tc_url, url);
     }
-    //LLOG(LL_TRACE, "parse_url('%s'): app='%s' tcUrl='%s' streamName='%s'",
-    //     url, h->app->data, h->tc_url->data, h->stream_name->data);
+    LLOG(LL_TRACE, "parse_url('%s'): app='%s' tcUrl='%s' streamName='%s'",
+         url, h->app->data, h->tc_url->data, h->stream_name->data);
 }
 
 void create_handle(http_peer_t *peer, const char *transaction, const char *session_id,
@@ -764,23 +771,17 @@ void create_handle(http_peer_t *peer, const char *transaction, const char *sessi
         rtmp_client_t *client = rtmp_client_new(peer->srv->loop);
 
         sbuf_t *origin_url = sbuf_new1(1024);
-        sbuf_append1(origin_url, "rtmp://");
-        sbuf_append1(origin_url, ORIGIN_HOST);
-        const char* p = strchr(handle->tc_url->data + 8, '/');
-        if (p)
-            sbuf_append1(origin_url, p);
-        if (ZK_HOST)
-            sbuf_append1(origin_url, "|edge=1/");
-        else
-            sbuf_appendc(origin_url, '/');
-        sbuf_append(origin_url, handle->stream_name);
-
+        make_origin_url(origin_url, handle->tc_url->data, handle->stream_name->data);
         LLOG(LL_DEBUG, "handle %p pull new stream %p(%s) origin='%s'",
              handle, handle->stream, handle->stream_name->data, origin_url->data);
 
         rtmp_client_set_uri(client, origin_url->data);
         rtmp_client_tcp_connect(client, NULL);
-        rtmp_client_set_rtz_stream(client, handle->stream);
+        rtmp_client_set_userdata(client, handle->stream);
+        rtmp_client_set_audio_packet_cb(client, rtmp_audio_handler);
+        rtmp_client_set_video_packet_cb(client, rtmp_video_handler);
+        rtmp_client_set_video_codec_cb(client, rtmp_video_codec_handler);
+        rtmp_client_set_metadata_cb(client, rtmp_metadata_handler);
         handle->stream->rtmp_client = client;
         sbuf_del(origin_url);
     }
@@ -1066,6 +1067,7 @@ void send_rtp(rtz_handle_t *handle, int video, const void *data, int size)
 rtz_stream_t *rtz_stream_new(rtz_server_t *srv, const char *stream_name)
 {
     rtz_stream_t *stream = malloc(sizeof(rtz_stream_t));
+    memset(stream, 0, sizeof(rtz_stream_t));
     LLOG(LL_INFO, "rtz_stream_new %p (name=%s)", stream, stream_name);
     stream->srv = srv;
     stream->stream_name = sbuf_strdup(stream_name);
@@ -1454,4 +1456,42 @@ void rtz_handle_on_play_hook_handler(zl_loop_t *loop, long client_id, int result
         rtz_handle_del(handle);
     }
     
+}
+
+void rtmp_audio_handler(int64_t timestamp, uint16_t sframe_time,
+    int key_frame, const void *data, int size, void *udata)
+{
+    rtz_stream_push_audio(udata, timestamp * 8, data, size);
+}
+
+void rtmp_video_handler(int64_t timestamp, uint16_t sframe_time,
+    int key_frame, const void *data, int size, void *udata)
+{
+    rtz_stream_push_video(udata, timestamp * 90, sframe_time,
+        key_frame, data, size);
+}
+
+void rtmp_video_codec_handler(const void *data, int size, void *udata)
+{
+    rtz_stream_set_video_codec_h264(udata, data, size);
+}
+
+void rtmp_metadata_handler(int vcodec, int acodec, double videotime, void *udata)
+{
+    rtz_stream_update_videotime(udata, videotime);
+}
+
+void make_origin_url(sbuf_t *origin_url, const char *tc_url, const char *stream_name)
+{
+    sbuf_clear(origin_url);
+    sbuf_append1(origin_url, "rtmp://");
+    sbuf_append1(origin_url, ORIGIN_HOST);
+    const char *p = strchr(tc_url + 7, '/'); /* strip "rtmp://" */
+    if (p)
+        sbuf_append1(origin_url, p);
+    if (ZK_HOST)
+        sbuf_append1(origin_url, "|edge=1/");
+    else
+        sbuf_appendc(origin_url, '/');
+    sbuf_append1(origin_url, stream_name);
 }
