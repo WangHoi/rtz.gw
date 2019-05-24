@@ -563,6 +563,21 @@ void fmp4_mux_media_end(fmp4_mux_t *ctx,
     }
 }
 
+double fmp4_mux_duration(fmp4_mux_t *ctx, int64_t next_video_pts)
+{
+    /* Update duration */
+    fmp4_sample_info_t *first_sample, *last_sample;
+    if (ctx->sample_count[0] > 0) {
+        first_sample = &ctx->samples[0][0];
+        return (double)(next_video_pts - first_sample->pts) / 90000.0;
+    } else if (ctx->sample_count[1] > 0) {
+        first_sample = &ctx->samples[1][0];
+        last_sample = &ctx->samples[1][ctx->sample_count[1] - 1];
+        return (double)(last_sample->pts + last_sample->duration - first_sample->pts) / 8000.0;
+    }
+    return 0.0;
+}
+
 int write_trex(char *p, int idx)
 {
     p += write_fullbox(p, "trex", 32, 0, 0);

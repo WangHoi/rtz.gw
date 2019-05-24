@@ -364,6 +364,15 @@ void rtmp_client_set_metadata_cb(rtmp_client_t *client, rtmp_metadata_cb func)
 {
     client->metadata_cb = func;
 }
+void rtmp_client_enter_blocking(rtmp_client_t *client)
+{
+    tcp_chan_detach(client->chan);
+}
+void rtmp_client_leave_blocking(rtmp_client_t *client)
+{
+    tcp_chan_attach(client->chan, client->loop);
+    client->last_time = 0;
+}
 /*
 void rtmp_client_send_video(rtmp_client_t *client, uint32_t timestamp, const char *data, int size)
 {

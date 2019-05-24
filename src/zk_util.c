@@ -44,6 +44,7 @@ extern const char *ZK_HOST;
 extern const char *RTZ_PUBLIC_IP;
 extern const char *RTZ_LOCAL_IP;
 extern int RTZ_PUBLIC_SIGNAL_PORT;
+extern int RTZ_PUBLIC_HLS_PORT;
 extern int RTMP_PUBLIC_PORT;
 extern int RTMP_LOCAL_PORT;
 extern const char *ORIGIN_HOST;
@@ -62,10 +63,10 @@ static char rtz_edge_service_name[4096];
 
 static void zk_watch(zhandle_t *zzh, int type, int state, const char *path, void* ctx);
 static void zk_mkdir(zhandle_t *handle, const char *service_name, sbuf_t *real_path,
-                     const char *public_ip, int public_port,
+                     const char *public_ip, int public_port, int public_replay_port,
                      const char *local_ip, int local_port);
 static void zk_update(zhandle_t *handle, const char *real_path,
-                      const char *public_ip, int public_port,
+                      const char *public_ip, int public_port, int public_replay_port,
                       const char *local_ip, int local_port);
 static void zk_timeout_handler(zl_loop_t *loop, int id, void *udata);
 
@@ -79,7 +80,7 @@ void start_zk_registry(zl_loop_t *loop)
     snprintf(rtz_edge_service_name, sizeof(rtz_edge_service_name),
                 "%s%s/rtz/", RTZ_EDGE_SERVICE_NAME_PREFIX, ORIGIN_HOST);
     zk_mkdir(handle, rtz_edge_service_name, rtz_real_path,
-                RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT,
+                RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT, RTZ_PUBLIC_HLS_PORT,
                 RTZ_LOCAL_IP, RTMP_LOCAL_PORT);
     ztimer = zl_timer_start(loop, UPDATE_TIMEOUT_MSECS, UPDATE_TIMEOUT_MSECS, zk_timeout_handler, NULL);
 }
@@ -98,7 +99,8 @@ void stop_zk_registry()
 }
 
 void zk_mkdir(zhandle_t *handle, const char *service_name, sbuf_t *real_path,
-              const char *public_ip, int public_port, const char *local_ip, int local_port)
+    const char *public_ip, int public_port, int public_replay_port,
+    const char *local_ip, int local_port)
 {
     int ret;
     sbuf_t *mid_node = sbuf_new();
@@ -124,8 +126,9 @@ void zk_mkdir(zhandle_t *handle, const char *service_name, sbuf_t *real_path,
     char realpath[1024] = { 0 };
     char text[1024];
     snprintf(text, sizeof(text), "{\"public_host\": \"%s:%d\",\"local_host\": \"%s:%d\","
-                " \"origin_host\":\"%s\", \"mode\":2, \"load\": %d}",
-                public_ip, public_port, local_ip, local_port, ORIGIN_HOST, 0);
+        " \"public_replay_host\": \"%s:%d\", \"origin_host\":\"%s\", \"mode\":2, \"load\": %d}",
+        public_ip, public_port, local_ip, local_port,
+        public_ip, public_replay_port, ORIGIN_HOST, 0);
     ret = zoo_create(handle, service_name, text, strlen(text), &ZOO_OPEN_ACL_UNSAFE,
                      ZOO_EPHEMERAL | ZOO_SEQUENCE, realpath, sizeof(realpath) - 1);
     if (ret == ZOK) {
@@ -155,13 +158,15 @@ void zk_watch(zhandle_t *zzh, int type, int state, const char *path, void* ctx)
 }
 
 void zk_update(zhandle_t *handle, const char *real_path,
-               const char *public_ip, int public_port,
+               const char *public_ip, int public_port, int public_replay_port,
                const char *local_ip, int local_port)
 {
     char text[1024];
     snprintf(text, sizeof(text), "{\"public_host\": \"%s:%d\",\"local_host\": \"%s:%d\","
-                " \"origin_host\":\"%s\", \"mode\":2, \"load\": %d}",
-                public_ip, public_port, local_ip, local_port, ORIGIN_HOST, rtz_get_total_load());
+        " \"public_replay_host\":\"%s:%d\", \"origin_host\":\"%s\", \"mode\":2, \"load\": %d}",
+        public_ip, public_port, local_ip, local_port,
+        public_ip, public_replay_port,
+        ORIGIN_HOST, rtz_get_total_load());
     int ret = zoo_set(handle, real_path, text, strlen(text), -1);
     if (ret != ZOK) {
         LLOG(LL_ERROR, "zoo_set error %d", ret);
@@ -179,13 +184,13 @@ void zk_timeout_handler(zl_loop_t *loop, int id, void *udata)
             zookeeper_close(handle);
         handle = zookeeper_init2(ZK_HOST, &zk_watch, RECV_TIMEOUT_MSECS, NULL, (void *)&connected, 0, zk_log_handler);
         zk_mkdir(handle, rtz_edge_service_name, rtz_real_path,
-            RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT,
+            RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT, RTZ_PUBLIC_HLS_PORT,
             RTZ_LOCAL_IP, RTMP_LOCAL_PORT);
     }
 
     if (connected)
         zk_update(handle, rtz_real_path->data,
-                  RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT,
+                  RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT, RTZ_PUBLIC_HLS_PORT,
                   RTZ_LOCAL_IP, RTMP_LOCAL_PORT);
 }
 

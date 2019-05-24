@@ -23,3 +23,4 @@ void fmp4_mux_media_sample(fmp4_mux_t *ctx,
 void fmp4_mux_media_end(fmp4_mux_t *ctx,
     unsigned frag_seq, int64_t next_video_pts,
     sbuf_t *buf, double *out_duration);
+double fmp4_mux_duration(fmp4_mux_t *ctx, int64_t next_video_pts);
