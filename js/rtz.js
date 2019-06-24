@@ -523,7 +523,7 @@ function RtzSession(gatewayCallbacks) {
                     }
                 },
                 getId : function() { return handleId; },
-                //getBitrate : function() { return getBitrate(handleId); },
+                getBitrate : function() { return getBitrate(handleId); },
                 send : function(callbacks) { sendMessage(handleId, callbacks); },
                 //data : function(callbacks) { sendData(handleId, callbacks); },
                 //dtmf : function(callbacks) { sendDtmf(handleId, callbacks); },
@@ -736,7 +736,7 @@ function RtzSession(gatewayCallbacks) {
 			rtz.debug(config.pc);
 			if(config.pc.getStats) {	// FIXME
 				config.volume = {};
-				config.bitrate.value = "0 kbits/sec";
+				config.bitrate.value = NaN;
 			}
 			rtz.log("Preparing local SDP and gathering candidates (trickle=" + config.trickle + ")");
 			config.pc.oniceconnectionstatechange = function(e) {
@@ -913,6 +913,71 @@ function RtzSession(gatewayCallbacks) {
 			config.dtmfSender = null;
 		}
 		streamHandle.oncleanup();
+	}
+
+	function getBitrate(handleId) {
+		var pluginHandle = streamHandles[handleId];
+		if(pluginHandle === null || pluginHandle === undefined ||
+				pluginHandle.webrtcStuff === null || pluginHandle.webrtcStuff === undefined) {
+			rtz.warn("Invalid handle");
+			return NaN;
+		}
+		var config = pluginHandle.webrtcStuff;
+		if(config.pc === null || config.pc === undefined)
+			return NaN;
+		// Start getting the bitrate, if getStats is supported
+		if(config.pc.getStats) {
+			if(config.bitrate.timer === null || config.bitrate.timer === undefined) {
+				// rtz.log("Starting bitrate timer (via getStats)");
+				config.bitrate.timer = setInterval(function() {
+					config.pc.getStats()
+						.then(function(stats) {
+							stats.forEach(function (res) {
+								if(!res)
+									return;
+								var inStats = false;
+								// Check if these are statistics on incoming media
+								if((res.mediaType === "video" || res.id.toLowerCase().indexOf("video") > -1) &&
+										res.type === "inbound-rtp" && res.id.indexOf("rtcp") < 0) {
+									// New stats
+									inStats = true;
+								} else if(res.type == 'ssrc' && res.bytesReceived &&
+										(res.googCodecName === "VP8" || res.googCodecName === "")) {
+									// Older Chromer versions
+									inStats = true;
+								}
+								// Parse stats now
+								if(inStats) {
+									config.bitrate.bsnow = res.bytesReceived;
+									config.bitrate.tsnow = res.timestamp;
+									if(config.bitrate.bsbefore === null || config.bitrate.tsbefore === null) {
+										// Skip this round
+										config.bitrate.bsbefore = config.bitrate.bsnow;
+										config.bitrate.tsbefore = config.bitrate.tsnow;
+									} else {
+										// Calculate bitrate
+										var timePassed = config.bitrate.tsnow - config.bitrate.tsbefore;
+										if(rtz.webRTCAdapter.browserDetails.browser == "safari")
+											timePassed = timePassed/1000;	// Apparently the timestamp is in microseconds, in Safari
+										var bitRate = Math.round((config.bitrate.bsnow - config.bitrate.bsbefore) * 8 / timePassed);
+										if(rtz.webRTCAdapter.browserDetails.browser === 'safari')
+											bitRate = parseInt(bitRate/1000);
+										config.bitrate.value = bitRate;
+										// rtz.log("Estimated bitrate is " + config.bitrate.value);
+										config.bitrate.bsbefore = config.bitrate.bsnow;
+										config.bitrate.tsbefore = config.bitrate.tsnow;
+									}
+								}
+							});
+						});
+				}, 1000);
+				return NaN;	// We don't have a bitrate value yet
+			}
+			return config.bitrate.value;
+		} else {
+			rtz.warn("Getting the video bitrate unsupported by browser");
+			return NaN;
+		}
 	}
 
 	// Helper methods to parse a media object

@@ -14,6 +14,7 @@
 {
     "mode": 2,
     "public_host": "ip:port",
+    "public_replay_host": "ip:port",
     "local_host": "ip:port",
     "origin_host": "ip:port",
     "load": 10
@@ -25,7 +26,8 @@ mode:
 注：a、目前只在直播时候考虑推流到源节点，从边缘节点取流。其余情况下都向源节点推流和取流
     b、考虑到向前兼容流媒体服务器注册信息，当没有mode字段的时候，该节点即使源节点也是边缘节点
 
-public_host: 外网地址
+public_host: 外网实时流地址
+public_replay_host: 外网回放地址
 local_host： 内网地址
 origin_host：
     a、当该节点为源节点时候， 该地址同内网地址
@@ -166,7 +168,7 @@ void zk_update(zhandle_t *handle, const char *real_path,
         " \"public_replay_host\":\"%s:%d\", \"origin_host\":\"%s\", \"mode\":2, \"load\": %d}",
         public_ip, public_port, local_ip, local_port,
         public_ip, public_replay_port,
-        ORIGIN_HOST, rtz_get_total_load());
+        ORIGIN_HOST, rtz_shard_get_total_load());
     int ret = zoo_set(handle, real_path, text, strlen(text), -1);
     if (ret != ZOK) {
         LLOG(LL_ERROR, "zoo_set error %d", ret);

@@ -3,7 +3,7 @@
         {
             "name": "Linux",
             "generator": "Unix Makefiles",
-            "remoteMachineName": "${defaultRemoteMachineName}",
+            "remoteMachineName": "2049801981;172.20.213.210 (username=root, port=22, authentication=Password)",
             "configurationType": "RelWithDebInfo",
             "remoteCMakeListsRoot": "/var/tmp/src/${workspaceHash}/${name}",
             "cmakeExecutable": "/usr/local/bin/cmake",

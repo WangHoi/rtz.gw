@@ -6,6 +6,7 @@
 #include "sbuf.h"
 #include "log.h"
 #include "rtmp_client.h"
+#include "http_hooks.h"
 #include "media/fmp4_mux.h"
 #include "media/codec_types.h"
 #include "media/flac_util.h"
@@ -84,6 +85,7 @@ struct http_peer_t {
  *      and hls_stream_t own the rtmp_client.
  */
 struct hls_stream_t {
+    zl_loop_t *loop;
     /** link to hls_server_t.stream_list */
     struct list_head link;
     hls_server_t *srv;
@@ -112,6 +114,10 @@ struct hls_stream_t {
     int paused;
     long long last_in_time;
     long long last_out_time;
+
+    long hook_client_id;            /* http hook, -1 if invalid */
+    long recv_bytes;
+    long send_bytes;
 };
 
 struct hls_fragment_t {
@@ -126,7 +132,7 @@ struct hls_fragment_t {
 };
 
 extern const char *RTZ_PUBLIC_IP;
-extern int RTZ_PUBLIC_SIGNAL_PORT;
+extern int RTZ_PUBLIC_HLS_PORT;
 
 extern void make_origin_url(sbuf_t *origin_url, const char *tc_url, const char *stream_name);
 
@@ -161,6 +167,9 @@ static void check_evict_fragment(hls_stream_t *h);
 static void check_stream_congestion(hls_stream_t *h);
 static hls_fragment_t *hls_fragment_new(hls_stream_t *stream);
 static void hls_fragment_del(hls_fragment_t *frag);
+
+static void hls_stream_on_play_hook_handler(zl_loop_t *loop, long client_id, int result, void *udata);
+static hls_stream_t *find_stream2(hls_server_t *srv, long client_id);
 
 hls_server_t *hls_server_new(zl_loop_t *loop)
 {
@@ -205,6 +214,15 @@ void hls_server_stop(hls_server_t *srv)
     hls_stream_t *s, *stmp;
     list_for_each_entry_safe(s, stmp, &srv->stream_list, link) {
         hls_stream_del(s);
+    }
+}
+
+void hls_server_kick_stream(hls_server_t * srv, const char * tc_url, const char * stream_name)
+{
+    hls_stream_t *stream, *tmp;
+    list_for_each_entry_safe(stream, tmp, &srv->stream_list, link) {
+        if (!strcmp(stream_name, stream->stream_name->data))
+            hls_stream_del(stream);
     }
 }
 
@@ -384,13 +402,27 @@ void http_request_handler(http_peer_t *peer, http_request_t *req)
             stream->rtmp_client = client;
             LLOG(LL_TRACE, "add new stream %s origin_url='%s'", stream->stream_name->data, origin_url->data);
             sbuf_del(origin_url);
+
+            /* hook */
+            stream->hook_client_id = lrand48();
+            http_hook_on_play(stream->loop, stream->app->data, stream->tc_url->data,
+                stream->stream_name->data, stream->hook_client_id,
+                hls_stream_on_play_hook_handler, peer->srv);
         }
+        /* update stats */
         stream->last_out_time = zl_time();
+        stream->recv_bytes += req->full_len;
+        stream->send_bytes += stream->m3u8_buf->size;
+
         send_reply_data(peer, stream->m3u8_buf->data, stream->m3u8_buf->size);
     } else if (sbuf_ends_withi(peer->url_path, ".mp4")) {
         //LLOG(LL_TRACE, "handle: %s %s", http_strmethod(req->method), req->path);
         if (stream) {
+            /* update stats */
             stream->last_out_time = zl_time();
+            stream->recv_bytes += req->full_len;
+            stream->send_bytes += stream->init_frag_buf->size;
+
             send_reply_data(peer, stream->init_frag_buf->data, stream->init_frag_buf->size);
         } else {
             send_final_reply(peer, HTTP_STATUS_NOT_FOUND);
@@ -401,8 +433,13 @@ void http_request_handler(http_peer_t *peer, http_request_t *req)
             hls_fragment_t *frag = find_fragment(&stream->media_frag_list, frag_name->data);
             if (frag) {
                 frag->fetched = 1;
+                /* update stats */
                 stream->last_out_time = zl_time();
+                stream->recv_bytes += req->full_len;
+                stream->send_bytes += frag->data_buf->size;
+
                 send_reply_data(peer, frag->data_buf->data, frag->data_buf->size);
+
                 /* check evict fragment */
                 check_evict_fragment(stream);
                 /* may resume */
@@ -444,7 +481,7 @@ void parse_m3u8_path(hls_stream_t *h, const char *url)
         sbuf_strcpy(h->app, "live");
     }
     p = strrchr(url, '/');
-    sbuf_printf(h->tc_url, "rtmp://%s:%d", RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT);
+    sbuf_printf(h->tc_url, "rtmp://%s:%d", RTZ_PUBLIC_IP, RTZ_PUBLIC_HLS_PORT);
     if (p) {
         sbuf_strcpy(h->stream_name, p + 1);
         /* Strip suffix */
@@ -464,6 +501,7 @@ hls_stream_t *hls_stream_new(hls_server_t *srv)
 {
     hls_stream_t *stream = malloc(sizeof(hls_stream_t));
     memset(stream, 0, sizeof(hls_stream_t));
+    stream->loop = srv->loop;
     stream->srv = srv;
     stream->tc_url = sbuf_new();
     stream->app = sbuf_new();
@@ -480,6 +518,7 @@ hls_stream_t *hls_stream_new(hls_server_t *srv)
     stream->height = 720;
     stream->last_in_time = stream->last_out_time = zl_time();
     update_stream_m3u8_buf(stream);
+    stream->hook_client_id = -1;
     return stream;
 }
 
@@ -489,6 +528,13 @@ void hls_stream_del(hls_stream_t *stream)
     if (stream->rtmp_client) {
         rtmp_client_del(stream->rtmp_client);
         stream->rtmp_client = NULL;
+    }
+    /* http hook */
+    if (stream->hook_client_id != -1) {
+        http_hook_on_stop(stream->loop, stream->app->data, stream->tc_url->data,
+            stream->stream_name->data, stream->hook_client_id);
+        http_hook_on_close(stream->loop, stream->app->data, stream->tc_url->data, stream->stream_name->data,
+            stream->recv_bytes, stream->send_bytes, stream->hook_client_id);
     }
     list_del(&stream->link);
     sbuf_del(stream->tc_url);
@@ -850,4 +896,41 @@ void hls_server_cron(zl_loop_t *loop, int timerid, void *udata)
         }
 
     }
+}
+
+void hls_stream_on_play_hook_handler(zl_loop_t *loop, long client_id, int result, void *udata)
+{
+    /* Succeeds or timeout, no need to kill */
+    if (result >= 0 || result == HTTP_HOOK_TIMEOUT_ERROR)
+        return;
+    hls_server_t *srv = udata;
+    hls_stream_t *stream = find_stream2(srv, client_id);
+    if (stream) {
+        LLOG(LL_ERROR, "stream %p(client_id=%ld) http hook error %d", stream, client_id, result);
+        stream->hook_client_id = -1;
+        hls_stream_del(stream);
+    }
+
+}
+
+hls_stream_t *find_stream2(hls_server_t *srv, long client_id)
+{
+    hls_stream_t *stream;
+    list_for_each_entry(stream, &srv->stream_list, link) {
+        if (stream->hook_client_id == client_id)
+            return stream;
+    }
+    return NULL;
+}
+
+int hls_get_load(hls_server_t *srv)
+{
+    if (!srv)
+        return 0;
+    int load = 0;
+    hls_stream_t *stream;
+    list_for_each_entry(stream, &srv->stream_list, link) {
+        ++load;
+    }
+    return load;
 }

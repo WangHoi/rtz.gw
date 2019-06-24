@@ -1489,9 +1489,9 @@ void make_origin_url(sbuf_t *origin_url, const char *tc_url, const char *stream_
     const char *p = strchr(tc_url + 7, '/'); /* strip "rtmp://" */
     if (p)
         sbuf_append1(origin_url, p);
-    //if (ZK_HOST)
+    if (ZK_HOST)
         sbuf_append1(origin_url, "|edge=1/");
-    //else
-    //    sbuf_appendc(origin_url, '/');
+    else
+        sbuf_appendc(origin_url, '/');
     sbuf_append1(origin_url, stream_name);
 }

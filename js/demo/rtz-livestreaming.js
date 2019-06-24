@@ -38,7 +38,7 @@ document.addEventListener('DOMContentLoaded', function() {
 		}
 	}});
 });
-
+var rtzHandle = null;
 function startStream(url) {
 	selectedStreamUrl = url;
 	rtz.log("Selected stream url=" + selectedStreamUrl);
@@ -53,7 +53,7 @@ function startStream(url) {
 		server: server,
 		notifyDestroyed: true,
 		success: function() {
-			var rtzHandle = null;
+			rtzHandle = null;
 			// Create a streaming handle
 			rtzSession.createHandle({
 				opaqueId: opaqueId,
@@ -122,6 +122,7 @@ function startStream(url) {
 					rtz.debug(" ::: Got a remote stream :::");
 					rtz.debug(stream);
 					rtz.attachMediaStream(document.getElementById('remotevideo'), stream);
+					rtz.debug(rtzHandle.getBitrate());
 				},
 				ondataopen: function(data) {
 					rtz.log("The DataChannel is available!");

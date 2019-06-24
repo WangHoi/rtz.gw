@@ -407,7 +407,7 @@ size_t amf0_write_string(void *data, size_t size, const char *str)
 
     size -= 2;
     int len = strlen(str);
-    if (size > len)
+    if ((int)size > len)
         size = len;
     pack_be16(p, (uint16_t)size);
     memcpy (p + 2, str, size);
@@ -431,7 +431,7 @@ size_t amf0_write_field_name(void *data, size_t size, const char *str)
     uint8_t *p = data;
     size -= 2;
     int len = strlen(str);
-    if (size > len)
+    if ((int)size > len)
         size = len;
     pack_be16(p, (uint16_t)size);
     memcpy (p + 2, str, size);

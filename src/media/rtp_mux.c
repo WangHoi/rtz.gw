@@ -1,4 +1,4 @@
-﻿#include "rtp_mux.h"
+#include "rtp_mux.h"
 #include "sbuf.h"
 #include "sdp.h"
 #include "codec_types.h"
@@ -116,7 +116,7 @@ void rtp_mux_h264(rtp_mux_t *ctx, uint32_t timestamp, const void *data, int size
 
     pout = buf + sizeof(rtp_header_t);
     pack_be16(&hdr->seqnum, ctx->seqnum[video]++);
-    hdr->marker = (size <= MAX_RTP_PACKET_SIZE - sizeof(rtp_header_t)) ? 1 : 0;
+    hdr->marker = (size <= MAX_RTP_PACKET_SIZE - (int)sizeof(rtp_header_t)) ? 1 : 0;
     // no fragments
     if (hdr->marker) {
         memcpy(pout, data, size);

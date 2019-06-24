@@ -1,4 +1,4 @@
-﻿#include "h26x.h"
+#include "h26x.h"
 #include "sbuf.h"
 #include "pack_util.h"
 #include <stdlib.h>
@@ -64,7 +64,7 @@ int update_h264_decoder_config_record(sbuf_t *config, const char *new_sps_data, 
     sbuf_t *pps = sbuf_strndup(config->data + 8 + sps_size + 3, pps_size);
 
     int changed;
-    if (new_sps_size == sps->size && new_pps_size == pps->size
+    if (new_sps_size == (size_t)sps->size && new_pps_size == (size_t)pps->size
         && !memcmp(new_sps_data, sps->data, new_sps_size)
         && !memcmp(new_sps_data, sps->data, new_sps_size)) {
 

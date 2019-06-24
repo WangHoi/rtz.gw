@@ -210,6 +210,7 @@ http_request_t *http_parse_request(void *peer, const char *p, const char *const 
     req = http_request_new(peer);
     if (!req)
         return NULL;
+    req->full_len = pend - p;
     ret = http_parse_request_line(p, pend, req, &p);
     if (ret != 0)
         goto err_out;
@@ -448,6 +449,7 @@ http_response_t *http_parse_response(void *peer, const char *p, const char *cons
     r = http_response_new(peer);
     if (!r)
         return NULL;
+    r->full_len = pend - p;
     ret = http_parse_response_line(p, pend, r, &p);
     if (ret != 0)
         goto err_out;

@@ -12,6 +12,7 @@
 #include "algo/sha1.h"
 #include "rtz_shard.h"
 #include "net/rtz_server.h"
+#include "net/hls_server.h"
 #include <time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -28,6 +29,9 @@
 #include <sys/uio.h>
 #include <cJSON.h>
 
+extern int RTZ_PUBLIC_SIGNAL_PORT;
+extern int RTZ_PUBLIC_HLS_PORT;
+
 enum http_parse_state {
     HTTP_PARSE_HEADER,
     HTTP_PARSE_BODY,
@@ -36,6 +40,12 @@ enum http_parse_state {
 enum http_peer_flag {
     HTTP_PEER_CLOSE_ASAP = 1,
     HTTP_PEER_ERROR = 2,
+};
+
+enum stream_type {
+    STREAM_TYPE_UNKNOWN = 0,
+    STREAM_TYPE_RTZ = 1,
+    STREAM_TYPE_HLS = 2,
 };
 
 typedef struct monitor_peer_t monitor_peer_t;
@@ -70,6 +80,8 @@ static void monitor_peer_del(monitor_peer_t *peer, int flush_write);
 
 static void send_final_reply(monitor_peer_t *peer, http_status_t status);
 static void send_final_reply_json(monitor_peer_t *peer, http_status_t status, const char *body);
+
+static enum stream_type parse_stream_type(const char *tc_url);
 
 monitor_server_t *monitor_server_new(zl_loop_t *loop)
 {
@@ -177,7 +189,7 @@ void request_handler(monitor_peer_t *peer, http_request_t *req)
     }
     LLOG(LL_TRACE, "recv json '%s'", b->data);
     if (!strcmp(control, "kick")) {
-        rtz_kick_stream(tc_url, stream);
+        rtz_shard_kick_stream(tc_url, stream);
 
         char reply_json[128];
         snprintf(reply_json, sizeof(reply_json), "{\"code\":1,\"data\":\"OK\"}");
@@ -272,4 +284,18 @@ void send_final_reply_json(monitor_peer_t *peer, http_status_t status, const cha
         free(s);
     }
     peer->flag |= HTTP_PEER_CLOSE_ASAP;
+}
+
+enum stream_type parse_stream_type(const char *tc_url)
+{
+    enum stream_type type = STREAM_TYPE_UNKNOWN;
+    int port;
+    int ret = sscanf(tc_url, "%*[^:]://%*[^:]:%d", &port);
+    if (ret == 1) {
+        if (port == RTZ_PUBLIC_SIGNAL_PORT)
+            type = STREAM_TYPE_RTZ;
+        else if (port == RTZ_PUBLIC_HLS_PORT)
+            type = STREAM_TYPE_HLS;
+    }
+    return type;
 }

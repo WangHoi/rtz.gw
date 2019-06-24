@@ -8,3 +8,5 @@ int hls_server_bind(hls_server_t *srv, unsigned short port);
 void hls_server_del(hls_server_t *srv);
 int hls_server_start(hls_server_t *srv);
 void hls_server_stop(hls_server_t *srv);
+void hls_server_kick_stream(hls_server_t *srv, const char *tc_url, const char *stream);
+int hls_get_load(hls_server_t *srv);

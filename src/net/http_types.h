@@ -111,6 +111,7 @@ typedef struct http_request_t {
     char *path;
     int body_len;
     char *body;
+    int full_len;
     struct list_head header_list;
     struct list_head link;
 } http_request_t;
@@ -120,6 +121,7 @@ typedef struct http_response_t {
     http_status_t status;
     int body_len;
     char *body;
+    int full_len;
     struct list_head header_list;
 } http_response_t;
 

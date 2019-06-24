@@ -1214,6 +1214,8 @@ void ice_tcp_sent_handler(tcp_chan_t *chan, void *udata)
                     res = srtp_protect(component->dtls->srtp_out, pkt->data, &plen);
                 else if (pkt->type == ICE_PACKET_AUDIO_RTCP || pkt->type == ICE_PACKET_VIDEO_RTCP)
                     res = srtp_protect_rtcp(component->dtls->srtp_out, pkt->data, &plen);
+                else
+                    res = srtp_err_status_fail;
                 //LLOG(LL_TRACE, "encrypt %d -> %d", pkt->length, plen);
                 if (res == srtp_err_status_ok) {
                     pkt->encrypted = 1;

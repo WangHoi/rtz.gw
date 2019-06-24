@@ -21,7 +21,6 @@ struct rtz_shard_t {
     int idx;
     zl_loop_t *loop;
     rtz_server_t *rtz_srv;
-    hls_server_t *hls_srv;
     int load;
 };
 
@@ -40,6 +39,7 @@ static zl_loop_t *rtz_control_loop = NULL;
 static int rtz_total_load = 0;
 static volatile int shards_stopping = 0;
 static monitor_server_t *mon_srv = NULL;
+static hls_server_t *hls_srv;
 
 static rtz_shard_t *shard_new(int idx);
 static void rtz_shard_del(rtz_shard_t *d);
@@ -48,7 +48,8 @@ static void stop_shard(zl_loop_t *loop, void *udata);
 static void after_stop_shard(zl_loop_t *loop, void *udata);
 static void get_shard_load(zl_loop_t *loop, void *udata);
 static void update_total_load(zl_loop_t *loop, void *udata);
-static void kick_stream(zl_loop_t *loop, void *udata);
+static void kick_rtz_stream(zl_loop_t *loop, void *udata);
+static void kick_hls_stream(zl_loop_t *loop, void *udata);
 
 void start_rtz_shards(zl_loop_t *control_loop)
 {
@@ -57,6 +58,11 @@ void start_rtz_shards(zl_loop_t *control_loop)
     for (i = 0; i < RTZ_SHARDS; ++i) {
         rtz_shards[i] = shard_new(i);
     }
+
+    hls_srv = hls_server_new(control_loop);
+    hls_server_bind(hls_srv, RTZ_LOCAL_HLS_PORT);
+    hls_server_start(hls_srv);
+
     mon_srv = monitor_server_new(control_loop);
     monitor_server_bind(mon_srv, (unsigned short)RTZ_MONITOR_PORT);
     monitor_server_start(mon_srv);
@@ -66,11 +72,15 @@ void stop_rtz_shards()
 {
     monitor_server_stop(mon_srv);
     monitor_server_del(mon_srv);
+
     int i;
     for (i = 0; i < RTZ_SHARDS; ++i) {
         rtz_shard_del(rtz_shards[i]);
     }
     memset(rtz_shards, 0, sizeof(rtz_shards));
+
+    hls_server_stop(hls_srv);
+    hls_server_del(hls_srv);
 }
 
 int rtz_shard_get_index_ct()
@@ -98,21 +108,23 @@ zl_loop_t *rtz_shard_get_control_loop()
     return rtz_control_loop;
 }
 
-int rtz_get_total_load()
+int rtz_shard_get_total_load()
 {
     if (!shards_stopping)
         zl_invoke(rtz_shards[0]->loop, get_shard_load, 0);
     return rtz_total_load;
 }
 
-void rtz_kick_stream(const char *tc_url, const char *stream)
+void rtz_shard_kick_stream(const char *tc_url, const char *stream)
 {
     if (!shards_stopping) {
         struct rtz_kick_udata *ud = malloc(sizeof(struct rtz_kick_udata));
         memset(ud, 0, sizeof(struct rtz_kick_udata));
         ud->tc_url = sbuf_strdup(tc_url);
         ud->stream = sbuf_strdup(stream);
-        zl_invoke(rtz_shards[0]->loop, kick_stream, ud);
+        zl_invoke(rtz_shards[0]->loop, kick_rtz_stream, ud);
+
+        hls_server_kick_stream(hls_srv, tc_url, stream);
     }
 }
 
@@ -164,10 +176,6 @@ void *shard_entry(void *arg)
     rtz_server_bind(d->rtz_srv, RTZ_LOCAL_SIGNAL_PORT);
     rtz_server_start(d->rtz_srv);
 
-    d->hls_srv = hls_server_new(d->loop);
-    hls_server_bind(d->hls_srv, RTZ_LOCAL_HLS_PORT);
-    hls_server_start(d->hls_srv);
-
     pthread_barrier_wait(&d->start_barrier);
 
     while (!zl_loop_stopped(d->loop)) {
@@ -175,7 +183,6 @@ void *shard_entry(void *arg)
     }
 
     LLOG(LL_INFO, "shard %d stopping...", d->idx);
-    hls_server_stop(d->hls_srv);
     rtz_server_stop(d->rtz_srv);
 
     long long ts = zl_timestamp();
@@ -184,7 +191,6 @@ void *shard_entry(void *arg)
     } while (ts + 1000 > zl_timestamp());
 
     rtz_server_del(d->rtz_srv);
-    hls_server_del(d->hls_srv);
     d->rtz_srv = NULL;
 
     nbuf_cleanup_free_list_ct();
@@ -235,7 +241,7 @@ void get_shard_load(zl_loop_t *loop, void *udata)
     }
 }
 
-void kick_stream(zl_loop_t *loop, void *udata)
+void kick_rtz_stream(zl_loop_t *loop, void *udata)
 {
     UNUSED(loop);
 
@@ -245,7 +251,7 @@ void kick_stream(zl_loop_t *loop, void *udata)
 
     int next_idx = rtz_shard_index_ct + 1;
     if (next_idx < RTZ_SHARDS) {
-        zl_invoke(rtz_shards[next_idx]->loop, kick_stream, kick_udata);
+        zl_invoke(rtz_shards[next_idx]->loop, kick_rtz_stream, kick_udata);
     } else {
         sbuf_del(kick_udata->tc_url);
         sbuf_del(kick_udata->stream);
@@ -253,11 +259,26 @@ void kick_stream(zl_loop_t *loop, void *udata)
     }
 }
 
+void kick_hls_stream(zl_loop_t *loop, void *udata)
+{
+    UNUSED(loop);
+
+    struct rtz_kick_udata *kick_udata = udata;
+    hls_server_kick_stream(hls_srv, kick_udata->tc_url->data, kick_udata->stream->data);
+
+    sbuf_del(kick_udata->tc_url);
+    sbuf_del(kick_udata->stream);
+    free(kick_udata);
+}
+
 void update_total_load(zl_loop_t *loop, void *udata)
 {
     UNUSED(loop);
 
     rtz_total_load = (intptr_t)udata;
+    int hls_load = hls_get_load(hls_srv);
+
+    rtz_total_load += hls_load;
 
     char text[1024];
     char *p = text;
@@ -267,6 +288,7 @@ void update_total_load(zl_loop_t *loop, void *udata)
     for (i = 1; i < RTZ_SHARDS; ++i) {
         p += snprintf(p, pend - p, ",%4d", rtz_shards[i]->load);
     }
+    p += snprintf(p, pend - p, ";%4d", hls_load);
     if (RTZ_SHARDS > 1)
         p += snprintf(p, pend - p, " total=%d", rtz_total_load);
     LLOG(LL_TRACE, "shard_loads=%s", text);
