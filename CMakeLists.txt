@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 project(rtz.gw C ASM)
-set(RTZ_VERSION "0.2.2_dev")
+set(RTZ_VERSION "0.2.2")
 
 set(OPENSSL_ROOT_DIR 3rdparty/openssl-1.1.0j)
 set(OPENSSL_INCLUDE_DIRS ${OPENSSL_ROOT_DIR}/include)
@@ -9,8 +9,9 @@ find_library(crypto_LIBRARY crypto PATHS ${OPENSSL_ROOT_DIR}/lib NO_DEFAULT_PATH
 set(OPENSSL_LIBRARIES ${ssl_LIBRARY} ${crypto_LIBRARY})
 find_library(srtp2_LIBRARY srtp2 PATHS 3rdparty/libsrtp-2.2.0/lib NO_DEFAULT_PATH)
 
-find_package(PkgConfig)
+find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBUNWIND REQUIRED libunwind-generic)
+pkg_check_modules(SYSTEMD REQUIRED libsystemd)
 
 add_subdirectory(3rdparty/cJSON-1.7.10)
 #add_subdirectory(3rdparty/libaco-1.2.4)
@@ -24,10 +25,6 @@ option(WITH_TCMALLOC "link with tcmalloc" OFF)
 option(WITH_ZOOKEEPER "enable zookeeper integration" OFF)
 
 add_definitions(-Wall -Wextra -Wno-unused-variable -Wno-unused-parameter -Wno-unused-function)
-
-if(PkgConfig_FOUND)
-    pkg_check_modules(SYSTEMD libsystemd)
-endif()
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/libsrtp-2.2.0/include
@@ -116,7 +113,7 @@ if(WITH_TCMALLOC)
     target_link_libraries(rtz.gw tcmalloc_and_profiler)
 endif()
 
-if(SYSTEMD_FOUND)
+if(WITH_SYSTEMD)
     add_definitions(-DWITH_SYSTEMD=1)
     target_link_libraries(rtz.gw ${SYSTEMD_LIBRARIES})
 endif()
@@ -145,7 +142,7 @@ set(CPACK_GENERATOR "DEB")
 set(CPACK_SOURCE_GENERATOR "TXZ")
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Wang Hoi")
 set(CPACK_PACKAGE_VERSION ${RTZ_VERSION})
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "libgoogle-perftools4 (>= 2.4-0)")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libgoogle-perftools4 (>= 2.4-0), libsystemd0")
 set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA "${CMAKE_CURRENT_SOURCE_DIR}/dist/postinst;${CMAKE_CURRENT_SOURCE_DIR}/dist/prerm;${CMAKE_CURRENT_SOURCE_DIR}/dist/postrm;")
 set(CPACK_SOURCE_IGNORE_FILES "/build/;/\.git/;/\.gitignore;/.*\.tmp")
 include(CPack)

@@ -185,6 +185,7 @@ void request_handler(monitor_peer_t *peer, http_request_t *req)
         LLOG(LL_ERROR, "parse json '%s' error", b->data);
         send_final_reply(peer, HTTP_STATUS_INTERNAL_SERVER_ERROR);
         sbuf_del(b);
+        cJSON_Delete(json);
         return;
     }
     LLOG(LL_TRACE, "recv json '%s'", b->data);
@@ -198,6 +199,7 @@ void request_handler(monitor_peer_t *peer, http_request_t *req)
         send_final_reply(peer, HTTP_STATUS_INTERNAL_SERVER_ERROR);
     }
     sbuf_del(b);
+    cJSON_Delete(json);
 }
 
 void peer_data_handler(tcp_chan_t *chan, void *udata)

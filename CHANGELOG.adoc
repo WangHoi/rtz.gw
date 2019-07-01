@@ -1,11 +1,14 @@
-#### 0.2.2_dev
+= CHANGELOG
+Hoi Wang <wanghoi@126.com>
 
-06/26/2019
+== 0.2.2
+
+07/01/2019
 
 - HLS replay
 - Cleanups
 
-#### 0.2.1
+== 0.2.1
 
 4/23/2019
 
