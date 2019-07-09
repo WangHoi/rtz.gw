@@ -7,6 +7,7 @@ Hoi Wang <wanghoi@126.com>
 
 - HLS replay
 - Cleanups
+- Fix accept EMFILE/ENFILE bug
 
 == 0.2.1
 

@@ -1,4 +1,4 @@
-﻿{
+{
   "configurations": [
     {
       "name": "Linux",
@@ -22,7 +22,8 @@
       "buildCommandArgs": "-j2",
       "ctestCommandArgs": "",
       "inheritEnvironments": [ "linux_x64" ],
-      "variables": []
+      "variables": [],
+      "intelliSenseMode": "linux-gcc-x64"
     }
   ]
 }

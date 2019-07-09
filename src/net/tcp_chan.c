@@ -13,6 +13,10 @@
 #include <assert.h>
 
 enum {
+    TCP_SRV_EMFILE_RECOVER_TIMEOUT_MSECS = 5000,
+};
+
+enum {
     TCP_CHAN_SND_BUF_SIZE = 65536,
     TCP_CHAN_RCV_BUF_SIZE = 65536,
 };
@@ -31,6 +35,9 @@ struct tcp_srv_t {
     tcp_srv_accept_cb accept_cb;
     void *udata;
     int flags;
+
+    long long emfile_ts;
+    int timer;
 };
 
 struct tcp_chan_t {
@@ -50,6 +57,7 @@ struct tcp_chan_t {
 static void srv_fd_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata);
 static void chan_fd_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata);
 static void update_chan_events(tcp_chan_t* chan);
+static void tcp_srv_timeout_handler(zl_loop_t *loop, int id, void *udata);
 
 tcp_srv_t *tcp_srv_new(zl_loop_t *loop)
 {
@@ -58,6 +66,7 @@ tcp_srv_t *tcp_srv_new(zl_loop_t *loop)
     srv->loop = loop;
     srv->fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     set_socket_reuseport(srv->fd, 1);
+    srv->timer = -1;
     return srv;
 }
 void tcp_srv_set_cb(tcp_srv_t *srv, tcp_srv_accept_cb accept_cb, void *udata)
@@ -81,12 +90,15 @@ int tcp_srv_bind(tcp_srv_t *srv, const char *ip, unsigned short port)
 
 int tcp_srv_listen(tcp_srv_t *srv)
 {
+    srv->timer = zl_timer_start(srv->loop, 1000, 1000, tcp_srv_timeout_handler, srv);
     zl_fd_ctl(srv->loop, EPOLL_CTL_ADD, srv->fd, EPOLLIN, srv_fd_event_handler, srv);
     return listen(srv->fd, 511);
 }
 
 void tcp_srv_del(tcp_srv_t *srv)
 {
+    if (srv->timer != -1)
+        zl_timer_stop(srv->loop, srv->timer);
     zl_fd_ctl(srv->loop, EPOLL_CTL_DEL, srv->fd, 0, NULL, NULL);
     close(srv->fd);
     free(srv);
@@ -343,8 +355,14 @@ void srv_fd_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata)
 {
     tcp_srv_t *srv = udata;
     tcp_chan_t *chan = tcp_chan_accept(loop, fd);
-    if (!chan)
+    if (!chan) {
+        if (errno == EMFILE || errno == ENFILE) {
+            LLOG(LL_FATAL, "fd %d stop listen, errno %d.", fd, (int)errno);
+            srv->emfile_ts = zl_timestamp();
+            zl_fd_ctl(srv->loop, EPOLL_CTL_DEL, srv->fd, 0, NULL, NULL);
+        }
         return;
+    }
     if (!srv->accept_cb) {
         tcp_chan_close(chan, 0);
         return;
@@ -420,5 +438,18 @@ void tcp_chan_attach(tcp_chan_t *chan, zl_loop_t *loop)
     if (chan->loop && (chan->flags & TCP_CHAN_CLOSING)) {
         if (nbuf_empty(chan->snd_buf))
             tcp_chan_close(chan, 0);
+    }
+}
+
+void tcp_srv_timeout_handler(zl_loop_t *loop, int id, void *udata)
+{
+    tcp_srv_t *srv = udata;
+    if (srv->emfile_ts == 0)
+        return;
+
+    long long now = zl_timestamp();
+    if (srv->emfile_ts + TCP_SRV_EMFILE_RECOVER_TIMEOUT_MSECS < now) {
+        srv->emfile_ts = 0;
+        zl_fd_ctl(srv->loop, EPOLL_CTL_ADD, srv->fd, EPOLLIN, srv_fd_event_handler, srv);
     }
 }
