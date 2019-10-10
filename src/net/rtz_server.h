@@ -1,5 +1,6 @@
 #pragma once
 #include "http_types.h"
+#include "drift_tracer.h"
 #include <stdint.h>
 
 typedef struct rtz_server_t rtz_server_t;
@@ -27,14 +28,25 @@ struct rtz_stream_t {
     /** rtz_handle_t.stream_link list */
     struct list_head handle_list;
 
+    /* first rtp timestamp */
+    int64_t first_rtp_ts;
+    /* last rtp timestamp */
+    int64_t last_rtp_ts;
+    /* first video input time */
+    long long first_in_time;
     /* last video input time */
     long long last_in_time;
     /* last video output time */
     long long last_out_time;
+    long long counter;
 
     rtp_mux_t *rtp_mux;
     /** Smoothed frame time, estimate FPS */
     uint16_t sframe_time;
+
+    /** Compensate bad camera */
+    drift_tracer_t *dtracer;
+    int64_t accum_over_drift;
 };
 
 rtz_server_t *rtz_server_new(zl_loop_t *loop);
@@ -49,9 +61,9 @@ rtz_stream_t *rtz_stream_new(rtz_server_t *srv, const char *stream_name);
 void rtz_stream_del(rtz_stream_t *stream);
 rtz_stream_t *rtz_stream_get(rtz_server_t *srv, const char *stream_name);
 void rtz_stream_set_video_codec_h264(rtz_stream_t *session, const void *data, int size);
-void rtz_stream_push_video(rtz_stream_t *stream, uint32_t rtp_timestamp, uint16_t sframe_time,
+void rtz_stream_push_video(rtz_stream_t *stream, int64_t rtp_timestamp, uint16_t sframe_time,
                            int key_frame, const void *data, int size);
-void rtz_stream_push_audio(rtz_stream_t *stream, uint32_t rtp_timestamp,
+void rtz_stream_push_audio(rtz_stream_t *stream, int64_t rtp_timestamp,
                            const void *data, int size);
 void rtz_stream_update_videotime(rtz_stream_t *stream, double videotime);
 void rtz_webrtcup(void *rtz_handle);

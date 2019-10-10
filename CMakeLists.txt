@@ -67,6 +67,7 @@ set(rtz_SRCS
     src/net/tcp_chan_ssl.c
     src/net/http_hooks.c
     src/net/monitor_server.c
+    src/net/drift_tracer.c
 	src/cbuf.c
 	src/sbuf.c
 	src/event_loop.c

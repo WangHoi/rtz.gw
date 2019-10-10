@@ -652,22 +652,6 @@ void ice_webrtc_hangup(ice_agent_t *handle, const char *reason)
         handle->rtcp_timer = -1;
     }
     rtz_hangup(handle->rtz_handle);
-
-#if 0
-    /* Stop incoming traffic */
-    if (handle->mainloop != NULL && handle->stream_id > 0) {
-        nice_agent_attach_recv(handle->agent, handle->stream_id, 1, g_main_loop_get_context(handle->mainloop), NULL, NULL);
-    }
-    /* Let's message the loop, we'll notify the plugin from there */
-    if (handle->queued_packets != NULL) {
-    #if GLIB_CHECK_VERSION(2, 46, 0)
-        g_async_queue_push_front(handle->queued_packets, &janus_ice_hangup_peerconnection);
-    #else
-        g_async_queue_push(handle->queued_packets, &janus_ice_hangup_peerconnection);
-    #endif
-        g_main_context_wakeup(handle->mainctx);
-    }
-#endif
 }
 
 void rtp_handler(ice_agent_t *agent, int video, const void *data, int size)

@@ -472,6 +472,7 @@ function RtzSession(gatewayCallbacks) {
 		var url = callbacks.url;
 		var transport = callbacks.transport || "udp";
 		var min_delay = callbacks.min_delay || 0;
+		var redirect = callbacks.redirect || 0;
 		var transaction = rtz.randomString(12);
 		var request = {
 			"type": "createHandle",
@@ -479,7 +480,8 @@ function RtzSession(gatewayCallbacks) {
 			"transaction": transaction,
 			"url": url,
 			"transport": transport,
-			"min_delay": min_delay
+			"min_delay": min_delay,
+			"redirect": redirect
 		};
         transactions[transaction] = function(json) {
             rtz.debug(json);
@@ -513,17 +515,22 @@ function RtzSession(gatewayCallbacks) {
                         value : null,
                         timer : null
                     },
-                    bitrate : {
-                        value : null,
-                        bsnow : null,
-                        bsbefore : null,
-                        tsnow : null,
-                        tsbefore : null,
+                    stats : {
+                        bs_value : null,
+                        bs_now : null,
+                        bs_before : null,
+                        bs_tsnow : null,
+                        bs_tsbefore : null,
+                        fs_value : null,
+                        fs_now : null,
+                        fs_before : null,
+                        fs_tsnow : null,
+                        fs_tsbefore : null,
                         timer : null
                     }
                 },
                 getId : function() { return handleId; },
-                getBitrate : function() { return getBitrate(handleId); },
+                getStats : function() { return getStats(handleId); },
                 send : function(callbacks) { sendMessage(handleId, callbacks); },
                 //data : function(callbacks) { sendData(handleId, callbacks); },
                 //dtmf : function(callbacks) { sendDtmf(handleId, callbacks); },
@@ -544,7 +551,7 @@ function RtzSession(gatewayCallbacks) {
                 ondestroyed : callbacks.ondestroyed,
                 destroy : function(callbacks) { destroyHandle(handleId, callbacks); }
             };
-            streamHandles[handleId] = streamHandle;
+			streamHandles[handleId] = streamHandle;
             callbacks.success(streamHandle);
         };
         request["session_id"] = sessionId;
@@ -736,7 +743,7 @@ function RtzSession(gatewayCallbacks) {
 			rtz.debug(config.pc);
 			if(config.pc.getStats) {	// FIXME
 				config.volume = {};
-				config.bitrate.value = NaN;
+				config.stats.value = NaN;
 			}
 			rtz.log("Preparing local SDP and gathering candidates (trickle=" + config.trickle + ")");
 			config.pc.oniceconnectionstatechange = function(e) {
@@ -873,14 +880,19 @@ function RtzSession(gatewayCallbacks) {
 					clearInterval(config.volume["remote"].timer);
 			}
 			config.volume = {};
-			if(config.bitrate.timer)
-				clearInterval(config.bitrate.timer);
-			config.bitrate.timer = null;
-			config.bitrate.bsnow = null;
-			config.bitrate.bsbefore = null;
-			config.bitrate.tsnow = null;
-			config.bitrate.tsbefore = null;
-			config.bitrate.value = null;
+			if(config.stats.timer)
+				clearInterval(config.stats.timer);
+			config.stats.timer = null;
+			config.stats.bs_now = null;
+			config.stats.bs_before = null;
+			config.stats.bs_tsnow = null;
+			config.stats.bs_tsbefore = null;
+			config.stats.bs_value = null;
+			config.stats.fs_now = null;
+			config.stats.fs_before = null;
+			config.stats.fs_tsnow = null;
+			config.stats.fs_tsbefore = null;
+			config.stats.fs_value = null;
 			try {
 				// Try a MediaStreamTrack.stop() for each track
 				if(!config.streamExternal && config.myStream !== null && config.myStream !== undefined) {
@@ -915,26 +927,31 @@ function RtzSession(gatewayCallbacks) {
 		streamHandle.oncleanup();
 	}
 
-	function getBitrate(handleId) {
+	function getStats(handleId) {
 		var pluginHandle = streamHandles[handleId];
 		if(pluginHandle === null || pluginHandle === undefined ||
 				pluginHandle.webrtcStuff === null || pluginHandle.webrtcStuff === undefined) {
 			rtz.warn("Invalid handle");
-			return NaN;
+			return {
+				framerate: NaN,
+				bitrate: NaN
+			}
 		}
 		var config = pluginHandle.webrtcStuff;
 		if(config.pc === null || config.pc === undefined)
 			return NaN;
 		// Start getting the bitrate, if getStats is supported
 		if(config.pc.getStats) {
-			if(config.bitrate.timer === null || config.bitrate.timer === undefined) {
+			if(config.stats.timer === null || config.stats.timer === undefined) {
 				// rtz.log("Starting bitrate timer (via getStats)");
-				config.bitrate.timer = setInterval(function() {
+				config.stats.timer = setInterval(function() {
 					config.pc.getStats()
 						.then(function(stats) {
+							rtz.debug('------------ new stats ------------');
 							stats.forEach(function (res) {
 								if(!res)
 									return;
+								rtz.debug(res);
 								var inStats = false;
 								// Check if these are statistics on incoming media
 								if((res.mediaType === "video" || res.id.toLowerCase().indexOf("video") > -1) &&
@@ -948,35 +965,67 @@ function RtzSession(gatewayCallbacks) {
 								}
 								// Parse stats now
 								if(inStats) {
-									config.bitrate.bsnow = res.bytesReceived;
-									config.bitrate.tsnow = res.timestamp;
-									if(config.bitrate.bsbefore === null || config.bitrate.tsbefore === null) {
+									// Bitrate update
+									config.stats.bs_now = res.bytesReceived;
+									config.stats.bs_tsnow = res.timestamp;
+									if(config.stats.bs_before === null || config.stats.bs_tsbefore === null) {
 										// Skip this round
-										config.bitrate.bsbefore = config.bitrate.bsnow;
-										config.bitrate.tsbefore = config.bitrate.tsnow;
+										config.stats.bs_before = config.stats.bs_now;
+										config.stats.bs_tsbefore = config.stats.bs_tsnow;
 									} else {
 										// Calculate bitrate
-										var timePassed = config.bitrate.tsnow - config.bitrate.tsbefore;
+										var timePassed = config.stats.bs_tsnow - config.stats.bs_tsbefore;
 										if(rtz.webRTCAdapter.browserDetails.browser == "safari")
 											timePassed = timePassed/1000;	// Apparently the timestamp is in microseconds, in Safari
-										var bitRate = Math.round((config.bitrate.bsnow - config.bitrate.bsbefore) * 8 / timePassed);
+										var bitRate = Math.round((config.stats.bs_now - config.stats.bs_before) * 8 / timePassed);
 										if(rtz.webRTCAdapter.browserDetails.browser === 'safari')
 											bitRate = parseInt(bitRate/1000);
-										config.bitrate.value = bitRate;
-										// rtz.log("Estimated bitrate is " + config.bitrate.value);
-										config.bitrate.bsbefore = config.bitrate.bsnow;
-										config.bitrate.tsbefore = config.bitrate.tsnow;
+										config.stats.bs_value = bitRate;
+										// rtz.log("Estimated bitrate is " + config.stats.value);
+										config.stats.bs_before = config.stats.bs_now;
+										config.stats.bs_tsbefore = config.stats.bs_tsnow;
+									}
+									
+									// Framerate calc
+									config.stats.fs_now = res.framesDecoded;
+									config.stats.fs_tsnow = res.timestamp;
+									if(config.stats.fs_before === null || config.stats.fs_tsbefore === null) {
+										// Skip this round
+										config.stats.fs_before = config.stats.fs_now;
+										config.stats.fs_tsbefore = config.stats.fs_tsnow;
+									} else {
+										// Calculate bitrate
+										var timePassed = config.stats.fs_tsnow - config.stats.fs_tsbefore;
+										if(rtz.webRTCAdapter.browserDetails.browser == "safari")
+											timePassed = timePassed/1000;	// Apparently the timestamp is in microseconds, in Safari
+										var framerate = Math.round((config.stats.fs_now - config.stats.fs_before) * 1000 / timePassed);
+										if (config.stats.fs_value) {
+											config.stats.fs_value = (config.stats.fs_value * 3 + framerate) / 4;
+										} else {
+											config.stats.fs_value = framerate;
+										}
+										config.stats.fs_before = config.stats.fs_now;
+										config.stats.fs_tsbefore = config.stats.fs_tsnow;
 									}
 								}
 							});
 						});
 				}, 1000);
-				return NaN;	// We don't have a bitrate value yet
+				return {
+					framerate: NaN,
+					bitrate: NaN
+				};	// We don't have a bitrate value yet
 			}
-			return config.bitrate.value;
+			return {
+				framerate: config.stats.fs_value,
+				bitrate: config.stats.bs_value
+			}
 		} else {
 			rtz.warn("Getting the video bitrate unsupported by browser");
-			return NaN;
+			return {
+				framerate: NaN,
+				bitrate: NaN
+			}
 		}
 	}
 

@@ -140,6 +140,7 @@ typedef struct rtz_handle_t {
     zl_loop_t *loop;
     sbuf_t *id;
     sbuf_t *url;
+    int url_redirect;               /* use 'url' directly */
     sbuf_t *app;
     sbuf_t *tc_url;
     sbuf_t *stream_name;
@@ -180,7 +181,8 @@ static void send_ws_frame(http_peer_t *peer, int text, const void *data, int siz
 static void create_session(http_peer_t *peer, const char *transaction);
 static void destroy_session(http_peer_t *peer, const char *transaction, const char *session_id);
 static void create_handle(http_peer_t *peer, const char *transaction, const char *session_id,
-                          const char *url, const char *transport, uint16_t min_playout_delay);
+                          const char *url, int url_redirect,
+    const char *transport, uint16_t min_playout_delay);
 static void destroy_handle(http_peer_t *peer, const char *transaction,
                            const char *session_id, const char *handle_id);
 static void handle_message(http_peer_t *peer, const char *transaction,
@@ -370,13 +372,15 @@ void peer_ws_frame_handler(http_peer_t *peer, struct ws_frame *frame)
             } else if (!strcmp(type, "createHandle")) {
                 const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(json, "url"));
                 const char *transport = cJSON_GetStringValue(cJSON_GetObjectItem(json, "transport"));
+                cJSON *redirect_json = cJSON_GetObjectItem(json, "redirect");
                 cJSON *min_playout_delay_json = cJSON_GetObjectItem(json, "min_delay");
                 uint16_t min_playout_delay = 0;
+                int redirect = redirect_json ? redirect_json->valueint : 0;
                 if (cJSON_IsNumber(min_playout_delay_json))
                     min_playout_delay = (uint16_t)min_playout_delay_json->valueint;
                 if (min_playout_delay > MAX_PLAYOUT_DELAY_FRAMES)
                     min_playout_delay = MAX_PLAYOUT_DELAY_FRAMES;
-                create_handle(peer, transaction, session_id, url, transport, min_playout_delay);
+                create_handle(peer, transaction, session_id, url, redirect, transport, min_playout_delay);
             } else if (!strcmp(type, "destroyHandle")) {
                 destroy_handle(peer, transaction, session_id, handle_id);
             } else if (!strcmp(type, "message")) {
@@ -722,7 +726,7 @@ void parse_url(rtz_handle_t *h, const char *url)
 }
 
 void create_handle(http_peer_t *peer, const char *transaction, const char *session_id,
-                   const char *url, const char *transport, uint16_t min_playout_delay)
+                   const char *url, int url_redirect, const char *transport, uint16_t min_playout_delay)
 {
     rtz_session_t *session = find_session(peer->srv, session_id);
     int tcp = transport && !strcasecmp(transport, "tcp");
@@ -743,6 +747,7 @@ void create_handle(http_peer_t *peer, const char *transaction, const char *sessi
     handle->session = session;
     handle->id = sbuf_random_string(12);
     handle->url = sbuf_new();
+    handle->url_redirect = url_redirect;
     handle->app = sbuf_new();
     handle->tc_url = sbuf_new();
     handle->stream_name = sbuf_new();
@@ -754,10 +759,14 @@ void create_handle(http_peer_t *peer, const char *transaction, const char *sessi
     handle->stream = find_stream(peer->srv, handle->stream_name->data);
 
     /* hook */
-    handle->hook_client_id = lrand48();
-    http_hook_on_play(handle->loop, handle->app->data, handle->tc_url->data,
-                      handle->stream_name->data, handle->hook_client_id,
-                      rtz_handle_on_play_hook_handler, peer->srv);
+    if (!handle->url_redirect) {
+        handle->hook_client_id = lrand48();
+        http_hook_on_play(handle->loop, handle->app->data, handle->tc_url->data,
+            handle->stream_name->data, handle->hook_client_id,
+            rtz_handle_on_play_hook_handler, peer->srv);
+    } else {
+        handle->hook_client_id = -1;
+    }
 
     LLOG(LL_TRACE, "rtz_handle_new %p(client_id=%ld,luser=%s)",
          handle, handle->hook_client_id, ice_get_luser(handle->ice));
@@ -771,7 +780,11 @@ void create_handle(http_peer_t *peer, const char *transaction, const char *sessi
         rtmp_client_t *client = rtmp_client_new(peer->srv->loop);
 
         sbuf_t *origin_url = sbuf_new1(1024);
-        make_origin_url(origin_url, handle->tc_url->data, handle->stream_name->data);
+        if (handle->url_redirect) {
+            sbuf_append(origin_url, handle->url);
+        } else {
+            make_origin_url(origin_url, handle->tc_url->data, handle->stream_name->data);
+        }
         LLOG(LL_DEBUG, "handle %p pull new stream %p(%s) origin='%s'",
              handle, handle->stream, handle->stream_name->data, origin_url->data);
 
@@ -1072,6 +1085,7 @@ rtz_stream_t *rtz_stream_new(rtz_server_t *srv, const char *stream_name)
     stream->srv = srv;
     stream->stream_name = sbuf_strdup(stream_name);
     stream->rtp_mux = rtp_mux_new();
+    stream->dtracer = drift_tracer_new();
     rtp_mux_set_cb(stream->rtp_mux, rtp_mux_handler, stream);
     list_add_tail(&stream->link, &srv->stream_list);
     INIT_LIST_HEAD(&stream->handle_list);
@@ -1126,6 +1140,7 @@ void rtz_stream_del(rtz_stream_t *stream)
     list_del(&stream->link);
     sbuf_del(stream->stream_name);
     rtp_mux_del(stream->rtp_mux);
+    drift_tracer_del(stream->dtracer);
     free(stream);
 }
 
@@ -1149,23 +1164,59 @@ void rtz_stream_set_video_codec_h264(rtz_stream_t *stream, const void *data, int
                         pps_data, pps_size);
 }
 
-void rtz_stream_push_video(rtz_stream_t *stream, uint32_t rtp_ts, uint16_t sframe_time,
+void rtz_stream_push_video(rtz_stream_t *stream, int64_t rtp_ts, uint16_t sframe_time,
                            int key_frame, const void *data, int size)
 {
     if (!stream)
         return;
+
+    long long now = zl_time();
     stream->sframe_time = sframe_time;
-    stream->last_in_time = zl_time();
+
+    //if (!strncmp(stream->stream_name->data, "realTime_HP", 11)) {
+        //LLOG(LL_DEBUG, "rtp=%"PRId64", size=%d, type=%hhx", rtp_ts, size, ((uint8_t*)data)[0] & 0x1f);
+        //rtp_ts = stream->counter++ * 3597;
+    //}
+#if 0
+    if (stream->first_in_time > 0) {
+        int64_t drift = (now - stream->first_in_time) - (rtp_ts - stream->first_rtp_ts) / 90;
+        //if (!strcmp(stream->stream_name->data, "realTime_HP100191A0050098_0_0")) {
+        //    LLOG(LL_DEBUG, "video ts=%"PRId64", now=%lld, drift=%"PRId64", size=%d",
+        //        (rtp_ts - stream->first_rtp_ts) / 90, now - stream->first_in_time,
+        //        drift, size);
+        //}
+
+        bool changed = drift_tracer_update(stream->dtracer, drift);
+        if (changed) {
+            stream->accum_over_drift += drift_tracer_get_over_drift(stream->dtracer);
+            LLOG(LL_INFO, "%s: update accum over_drift to %lld ms",
+                stream->stream_name->data, (long long)stream->accum_over_drift);
+            // reset
+            stream->first_in_time = 0;
+            stream->first_rtp_ts = 0;
+        }
+    }
+    if (stream->first_in_time == 0) {
+        stream->first_in_time = now;
+        stream->first_rtp_ts = rtp_ts;
+    }
+#endif
+    stream->last_rtp_ts = rtp_ts;
+    stream->last_in_time = now;
+#if 0
+    rtp_ts += (stream->accum_over_drift + drift_tracer_get_drift(stream->dtracer)) * 90;
+#endif
     if (!list_empty(&stream->handle_list)) {
-        stream->last_out_time = stream->last_in_time;
+        stream->last_out_time = now;
         rtp_mux_input(stream->rtp_mux, 1, rtp_ts, data, size);
     }
 }
 
-void rtz_stream_push_audio(rtz_stream_t *stream, uint32_t rtp_ts, const void *data, int size)
+void rtz_stream_push_audio(rtz_stream_t *stream, int64_t rtp_ts, const void *data, int size)
 {
     if (!stream)
         return;
+    rtp_ts += stream->accum_over_drift * 90;
     if (!list_empty(&stream->handle_list)) {
         rtp_mux_input(stream->rtp_mux, 0, rtp_ts, data, size);
     }
@@ -1173,6 +1224,8 @@ void rtz_stream_push_audio(rtz_stream_t *stream, uint32_t rtp_ts, const void *da
 
 void rtz_stream_update_videotime(rtz_stream_t *stream, double videotime)
 {
+    //LLOG(LL_DEBUG, "update videotime %s, time=%lf", stream->stream_name->data, videotime);
+    /*
     rtz_handle_t *h, *tmp;
     list_for_each_entry_safe(h, tmp, &stream->handle_list, stream_link) {
         if (!(h->flag & RTZ_HANDLE_STARTED))
@@ -1183,6 +1236,7 @@ void rtz_stream_update_videotime(rtz_stream_t *stream, double videotime)
         send_json(h->session->peer, json);
         cJSON_Delete(json);
     }
+    */
 }
 
 void rtz_webrtcup(void *rtz_handle)
@@ -1314,8 +1368,8 @@ void rtp_mux_handler(int video, int kf, void *data, int size, void *udata)
         }
         if (playout_delay_ext_ref) {
             const uint16_t frame_time = stream->sframe_time ?: 40;
-            update_playout_delay_ext(playout_delay_ext_ref,
-                                     frame_time * handle->min_playout_delay);
+            //update_playout_delay_ext(playout_delay_ext_ref,
+            //                         frame_time * handle->min_playout_delay);
             ice_prepare_video_keyframe(handle->ice);
         }
         send_rtp(handle, video, data, size);

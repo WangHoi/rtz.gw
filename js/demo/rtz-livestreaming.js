@@ -1,7 +1,8 @@
-//var server = 'ws://172.16.3.102:443/rtz';
+var server = 'ws://172.16.3.102:443/rtz';
 //var server = 'ws://172.16.3.103:443/rtz';
-var server = 'ws://172.20.226.86:443/rtz';
+//var server = 'ws://172.20.226.86:443/rtz';
 //var server = 'ws://192.168.2.55:443/rtz';
+//var server = 'ws://47.94.164.7:30002/rtz';
 var rtzSession = null;
 
 var opaqueId = "livestreaming-" + rtz.randomString(12);
@@ -59,7 +60,8 @@ function startStream(url) {
 				opaqueId: opaqueId,
 				url: url,
 				transport: "tcp",
-				min_delay: 320 / 40,
+				min_delay: 0,//320 / 40,
+				redirect: 0,
 				success: function(handle) {
 					rtzHandle = handle;
 				},
@@ -122,7 +124,7 @@ function startStream(url) {
 					rtz.debug(" ::: Got a remote stream :::");
 					rtz.debug(stream);
 					rtz.attachMediaStream(document.getElementById('remotevideo'), stream);
-					rtz.debug(rtzHandle.getBitrate());
+					rtz.debug(rtzHandle.getStats());
 				},
 				ondataopen: function(data) {
 					rtz.log("The DataChannel is available!");

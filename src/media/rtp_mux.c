@@ -97,7 +97,7 @@ void rtp_mux_h264(rtp_mux_t *ctx, uint32_t timestamp, const void *data, int size
             hdr->extension = 1;
             pack_be32(buf + sizeof(rtp_header_t), 0xbede0001);
              /* Set default MIN/MAX delay, will be rewrite later inside rtz_server.c */
-            pack_be32(buf + sizeof(rtp_header_t) + 4, 0x620000c8);
+            pack_be32(buf + sizeof(rtp_header_t) + 4, 0x62000000);
 
             pack_be16(&hdr->seqnum, ctx->seqnum[video]++);
             memcpy(buf + sizeof(rtp_header_t) + 8, ctx->sps->data, ctx->sps->size);
