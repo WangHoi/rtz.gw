@@ -27,6 +27,8 @@
 #include <time.h>
 #include <math.h>
 
+#undef HTTP_NO_HOOK
+
 enum http_parse_state {
     HTTP_PARSE_HEADER,
     HTTP_PARSE_BODY,
@@ -35,19 +37,24 @@ enum http_parse_state {
 enum http_peer_flag {
     HTTP_PEER_CLOSE_ASAP = 1,
     HTTP_PEER_ERROR = 2,
+    HTTP_PEER_INIT_WAIT = 4,
 };
 
 enum {
     /** Time before EOF hls_stream_t */
-    HLS_NO_VIDEO_EOF_TIMEOUT_MSECS = 10000,
+    HLS_NO_VIDEO_EOF_TIMEOUT_MSECS = 28000,
     /** Time before release hls_stream_t */
-    HLS_NO_VIDEO_CLEANUP_TIMEOUT_MSECS = 15000,
-    HLS_NO_OUTPUT_CLEANUP_TIMEOUT_MSECS = 5000,
+    //HLS_NO_VIDEO_CLEANUP_TIMEOUT_MSECS = 15000,
+    //HLS_NO_OUTPUT_CLEANUP_TIMEOUT_MSECS = 5000,
+    HLS_NO_VIDEO_CLEANUP_TIMEOUT_MSECS = 35000,
+    HLS_NO_OUTPUT_CLEANUP_TIMEOUT_MSECS = 30000,
     HLS_CRON_TIMEOUT_MSECS = 1000,
     DEFAULT_VOD_DURATION = 0,
-    EVICT_FRAG_THREHOLD = 5,
+    EVICT_FRAG_THREHOLD = 6,
     PAUSE_RTMP_FRAG_THREHOLD = 12,
     RESUME_RTMP_FRAG_THREHOLD = 8,
+
+    HLS_EARLY_FRAGMENTS = 2,
 };
 
 typedef struct http_peer_t http_peer_t;
@@ -68,6 +75,7 @@ struct http_peer_t {
 
     hls_server_t *srv;
     tcp_chan_t *chan;
+    hls_stream_t *stream;
 
     enum http_parse_state parse_state;
     sbuf_t *parse_buf;
@@ -86,20 +94,20 @@ struct http_peer_t {
  */
 struct hls_stream_t {
     zl_loop_t *loop;
-    /** link to hls_server_t.stream_list */
-    struct list_head link;
+    struct list_head link;              /* link to hls_server_t.stream_list */
     hls_server_t *srv;
 
     sbuf_t *tc_url;
     sbuf_t *app;
-    /** Such as 'realTime_xxx_0_0' */
-    sbuf_t *stream_name;
+    sbuf_t *stream_name;                /* Such as 'realTime_xxx_0_0' */
     rtmp_client_t *rtmp_client;
 
     sbuf_t *m3u8_buf;
     sbuf_t *init_frag_buf;
-    unsigned long frag_seq;
-    unsigned long media_seq;
+    //hls_fragment_t *last_ready_frag;    
+    hls_fragment_t *buffering_frag;     /* buffering */
+    unsigned long next_frag_seq;
+    unsigned long media_seq;            /* incr when .m3u8 changed */
     struct list_head media_frag_list;
     fmp4_mux_t *mux_ctx;
     int mux_started;
@@ -108,7 +116,7 @@ struct hls_stream_t {
     int width;
     int height;
     audio_codec_type_t acodec_type;
-    int vcodec_changed;
+    int vcodec_changed;             /* videotime PROGRAM-DATE-TIME changed */
     long pdt_changed;
     int eof;
     int paused;
@@ -170,6 +178,7 @@ static void hls_fragment_del(hls_fragment_t *frag);
 
 static void hls_stream_on_play_hook_handler(zl_loop_t *loop, long client_id, int result, void *udata);
 static hls_stream_t *find_stream2(hls_server_t *srv, long client_id);
+static void wakeup_waiting_peers(hls_stream_t *h);
 
 hls_server_t *hls_server_new(zl_loop_t *loop)
 {
@@ -382,6 +391,7 @@ void http_request_handler(http_peer_t *peer, http_request_t *req)
     //LLOG(LL_TRACE, "path='%s' stream_name='%s', frag_name='%s'",
     //    req->path, stream_name->data, frag_name->data);
     hls_stream_t *stream = find_stream(peer->srv, stream_name->data);
+    peer->stream = stream;
     if (sbuf_ends_withi(peer->url_path, ".m3u8")) {
         if (!stream) {
             LLOG(LL_TRACE, "handle: %s %s", http_strmethod(req->method), req->path);
@@ -392,6 +402,8 @@ void http_request_handler(http_peer_t *peer, http_request_t *req)
             rtmp_client_t *client = rtmp_client_new(peer->srv->loop);
             sbuf_t *origin_url = sbuf_new1(1024);
             make_origin_url(origin_url, stream->tc_url->data, stream->stream_name->data);
+            //sbuf_strcpy(origin_url, "rtmp://172.16.3.103:1935/live?token=efa24a65b2dc819caacdcc65|type=pass|rtmpUrltype=clientFetch|systemType=2|live=0|tId=78932095595549696|lHost172.16.3.103:1935/cloudRecord_01101002D8F06135E_0_0_0_06931d1e685d4f84a327f25bdfecfe94");
+            //sbuf_strcpy(origin_url, "rtmp://172.16.3.103:19358/live/cloudRecord_testvideo");
             rtmp_client_set_uri(client, origin_url->data);
             rtmp_client_tcp_connect(client, NULL);
             rtmp_client_set_userdata(client, stream);
@@ -402,25 +414,33 @@ void http_request_handler(http_peer_t *peer, http_request_t *req)
             stream->rtmp_client = client;
             LLOG(LL_TRACE, "add new stream %s origin_url='%s'", stream->stream_name->data, origin_url->data);
             sbuf_del(origin_url);
+            peer->stream = stream;
 
             /* hook */
+#ifndef HTTP_NO_HOOK
             stream->hook_client_id = lrand48();
             http_hook_on_play(stream->loop, stream->app->data, stream->tc_url->data,
                 stream->stream_name->data, stream->hook_client_id,
                 hls_stream_on_play_hook_handler, peer->srv);
+#endif
         }
         /* update stats */
         stream->last_out_time = zl_time();
         stream->recv_bytes += req->full_len;
         stream->send_bytes += stream->m3u8_buf->size;
 
-        send_reply_data(peer, stream->m3u8_buf->data, stream->m3u8_buf->size);
+        if (stream->next_frag_seq > HLS_EARLY_FRAGMENTS) {
+            send_reply_data(peer, stream->m3u8_buf->data, stream->m3u8_buf->size);
+        } else {
+            LLOG(LL_TRACE, "peer %p init_wait", peer);
+            peer->flag |= HTTP_PEER_INIT_WAIT;
+        }
     } else if (sbuf_ends_withi(peer->url_path, ".mp4")) {
         //LLOG(LL_TRACE, "handle: %s %s", http_strmethod(req->method), req->path);
         if (stream) {
             /* update stats */
-            stream->last_out_time = zl_time();
             stream->recv_bytes += req->full_len;
+            stream->last_out_time = zl_time();
             stream->send_bytes += stream->init_frag_buf->size;
 
             send_reply_data(peer, stream->init_frag_buf->data, stream->init_frag_buf->size);
@@ -432,10 +452,11 @@ void http_request_handler(http_peer_t *peer, http_request_t *req)
         if (stream) {
             hls_fragment_t *frag = find_fragment(&stream->media_frag_list, frag_name->data);
             if (frag) {
+                //LLOG(LL_TRACE, "fetch frag %lu end=%lu", frag->seq, stream->next_frag_seq);
                 frag->fetched = 1;
                 /* update stats */
-                stream->last_out_time = zl_time();
                 stream->recv_bytes += req->full_len;
+                stream->last_out_time = zl_time();
                 stream->send_bytes += frag->data_buf->size;
 
                 send_reply_data(peer, frag->data_buf->data, frag->data_buf->size);
@@ -519,6 +540,8 @@ hls_stream_t *hls_stream_new(hls_server_t *srv)
     stream->last_in_time = stream->last_out_time = zl_time();
     update_stream_m3u8_buf(stream);
     stream->hook_client_id = -1;
+    stream->buffering_frag = hls_fragment_new(stream);
+    fmp4_mux_media_start(stream->mux_ctx);
     return stream;
 }
 
@@ -531,10 +554,12 @@ void hls_stream_del(hls_stream_t *stream)
     }
     /* http hook */
     if (stream->hook_client_id != -1) {
+#ifndef HTTP_NO_HOOK
         http_hook_on_stop(stream->loop, stream->app->data, stream->tc_url->data,
             stream->stream_name->data, stream->hook_client_id);
         http_hook_on_close(stream->loop, stream->app->data, stream->tc_url->data, stream->stream_name->data,
             stream->recv_bytes, stream->send_bytes, stream->hook_client_id);
+#endif
     }
     list_del(&stream->link);
     sbuf_del(stream->tc_url);
@@ -642,9 +667,10 @@ void rtmp_video_handler(int64_t timestamp, uint16_t sframe_time,
     if (key_frame) {
         /* avoid too short fragment */
         if (h->mux_started && fmp4_mux_duration(h->mux_ctx, timestamp * 90) >= 0.9) {
-            hls_fragment_t *frag = hls_fragment_new(h);
+            hls_fragment_t *frag = h->buffering_frag;
             fmp4_mux_media_end(h->mux_ctx,
                 frag->seq, timestamp * 90, frag->data_buf, &frag->duration);
+            //LLOG(LL_DEBUG, "mux_duration=%.2lf", frag->duration);
 
             /* generate fragment m3u8 */
             update_frag_m3u8_buf(h, frag);
@@ -655,7 +681,13 @@ void rtmp_video_handler(int64_t timestamp, uint16_t sframe_time,
             /* update stream m3u8 */
             update_stream_m3u8_buf(h);
 
+            hls_fragment_new(h);
+            h->buffering_frag = list_entry(frag->link.next, hls_fragment_t, link);
             fmp4_mux_media_start(h->mux_ctx);
+
+            /* peers waiting on it */
+            if (h->next_frag_seq > HLS_EARLY_FRAGMENTS)
+                wakeup_waiting_peers(h);
         }
         h->mux_started = 1;
     }
@@ -819,11 +851,12 @@ hls_fragment_t *hls_fragment_new(hls_stream_t *h)
     hls_fragment_t *frag = malloc(sizeof(hls_fragment_t));
     memset(frag, 0, sizeof(hls_fragment_t));
     list_add_tail(&frag->link, &h->media_frag_list);
-    frag->seq = h->frag_seq;
-    frag->path = sbuf_newf("%lu.m4s", h->frag_seq);
+    frag->seq = h->next_frag_seq;
+    frag->path = sbuf_newf("%lu.m4s", h->next_frag_seq);
+    //LLOG(LL_TRACE, "append new frag %lu", h->next_frag_seq);
     frag->m3u8_buf = sbuf_new();
     frag->data_buf = sbuf_new();
-    ++h->frag_seq;
+    ++h->next_frag_seq;
     return frag;
 }
 
@@ -933,4 +966,22 @@ int hls_get_load(hls_server_t *srv)
         ++load;
     }
     return load;
+}
+
+void wakeup_waiting_peers(hls_stream_t *h)
+{
+    http_peer_t *peer, *tmp;
+    list_for_each_entry_safe(peer, tmp, &h->srv->peer_list, link) {
+        if (peer->stream == h) {
+            if (peer->flag & HTTP_PEER_INIT_WAIT) {
+                LLOG(LL_TRACE, "wakeup peer %p", peer);
+                peer->flag &= ~HTTP_PEER_INIT_WAIT;
+                /* update stats */
+                h->last_out_time = zl_time();
+                h->send_bytes += h->m3u8_buf->size;
+
+                send_reply_data(peer, h->m3u8_buf->data, h->m3u8_buf->size);
+            }
+        }
+    }
 }
