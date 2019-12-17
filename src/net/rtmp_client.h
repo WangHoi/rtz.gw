@@ -55,6 +55,8 @@ void rtmp_client_release_stream(rtmp_client_t *client, zl_defer_cb func);
 void rtmp_client_fcpublish(rtmp_client_t *client, zl_defer_cb func);
 void rtmp_client_publish(rtmp_client_t *client, zl_defer_cb func);
 */
+void rtmp_client_pause(rtmp_client_t *client, zl_defer_cb func);
+void rtmp_client_resume(rtmp_client_t *client, zl_defer_cb func);
 void rtmp_client_abort(rtmp_client_t *client);
 void rtmp_client_set_userdata(rtmp_client_t *client, void *udata);
 void rtmp_client_set_video_packet_cb(rtmp_client_t *client, rtmp_packet_cb func);

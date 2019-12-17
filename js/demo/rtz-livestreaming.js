@@ -1,8 +1,7 @@
-var server = 'ws://172.16.3.102:443/rtz';
-//var server = 'ws://172.16.3.103:443/rtz';
+//var server = 'ws://172.16.3.102:443/rtz';
 //var server = 'ws://172.20.226.86:443/rtz';
 //var server = 'ws://192.168.2.55:443/rtz';
-//var server = 'ws://47.94.164.7:30002/rtz';
+var server = 'ws://47.94.164.7:30002/rtz';
 var rtzSession = null;
 
 var opaqueId = "livestreaming-" + rtz.randomString(12);
@@ -57,10 +56,11 @@ function startStream(url) {
 			rtzHandle = null;
 			// Create a streaming handle
 			rtzSession.createHandle({
+				type: "streaming",
 				opaqueId: opaqueId,
 				url: url,
 				transport: "tcp",
-				min_delay: 0,//320 / 40,
+				min_delay: 0,
 				redirect: 0,
 				success: function(handle) {
 					rtzHandle = handle;
@@ -78,9 +78,9 @@ function startStream(url) {
 							if(status === 'starting') {
 								rtz.log("Starting, please wait...");
 								if (!spinner) {
-									spinner = new Spinner(spinner_opts).spin(document.getElementById('remotevideo').parentElement);
+									spinner = new Spinner(spinner_opts).spin(document.getElementById('video').parentElement);
 								} else {
-									spinner.spin(document.getElementById('remotevideo').parentElement);
+									spinner.spin(document.getElementById('video').parentElement);
 								}
 							} else if(status === 'started') {
 								rtz.log("Started");
@@ -123,7 +123,7 @@ function startStream(url) {
 				onremotestream: function(stream) {
 					rtz.debug(" ::: Got a remote stream :::");
 					rtz.debug(stream);
-					rtz.attachMediaStream(document.getElementById('remotevideo'), stream);
+					rtz.attachMediaStream(document.getElementById('video'), stream);
 					rtz.debug(rtzHandle.getStats());
 				},
 				ondataopen: function(data) {
@@ -134,7 +134,10 @@ function startStream(url) {
 				},
 				oncleanup: function() {
 					rtz.log(" ::: Got a cleanup notification :::");
-					rtz.attachMediaStream(document.getElementById('remotevideo'), null);
+					rtz.attachMediaStream(document.getElementById('video'), null);
+				},
+				iceState: function(state) {
+					rtz.log("ice state", state);
 				}
 			});
 		},

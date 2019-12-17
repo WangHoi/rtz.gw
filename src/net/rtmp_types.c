@@ -503,13 +503,23 @@ unsigned char rtmp_chunk_header_len(unsigned char fmt)
     assert(0);
     return 1;
 }
-
 unsigned char rtmp_chunk_channel(unsigned char hdr0)
 {
     return (hdr0 & 0x3f);
 }
-
-void rtmp_write_pong(const char *ev_data, int ev_size,
+void rtmp_write_ping(const void *ev_data, int ev_size,
+    rtmp_write_cb write_cb, void *udata)
+{
+    char buf[64];
+    char *p = buf;
+    p += rtmp_write_header0(p, RTMP_NETWORK_CHANNEL, 0, 2 + ev_size, RTMP_MESSAGE_USER_CONTROL, 0);
+    p += pack_be16(p, RTMP_EVENT_PING_REQUEST);
+    memcpy (p, ev_data, ev_size);
+    p += ev_size;
+    *p = 0;
+    write_cb(buf, (int)(p - buf), udata);
+}
+void rtmp_write_pong(const void *ev_data, int ev_size,
                      rtmp_write_cb write_cb, void *udata)
 {
     char buf[64];

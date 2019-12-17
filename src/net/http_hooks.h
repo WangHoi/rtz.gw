@@ -20,6 +20,12 @@ typedef void (*http_hook_cb)(zl_loop_t *loop, long client_id, int result, void *
 void http_hook_on_play(zl_loop_t *loop, const char *app, const char *tc_url,
                        const char *stream_name, long client_id,
                        http_hook_cb func, void *udata);
+/** @brief 流量上报
+ *
+ * 定时上报链路的流量，默认1小时上报一次，流量为1小时内产生的流量
+ */
+void http_hook_on_timer_report(zl_loop_t *loop, const char *app, const char *tc_url, const char *stream_name,
+    long recv_bytes, long send_bytes, long client_id);
 void http_hook_on_stop(zl_loop_t *loop, const char *app, const char *tc_url, const char *stream_name, long client_id);
 void http_hook_on_close(zl_loop_t *loop, const char *app, const char *tc_url,
                         const char *stream_name, long recv_bytes, long send_bytes, long client_id);

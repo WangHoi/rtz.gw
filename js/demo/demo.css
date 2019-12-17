@@ -64,6 +64,10 @@
 	/*height: 100%;*/
 	/*margin-top: 2px;*/
 }
+.v1{
+	width: 1280px;
+	height: 720px;
+}
 
 .video-container video {
     display: block;

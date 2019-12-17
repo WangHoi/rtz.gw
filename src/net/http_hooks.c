@@ -212,7 +212,7 @@ void http_hook_on_stop(zl_loop_t *loop, const char *app, const char *tc_url,
              "\"app\":\"%s\","
              "\"tcUrl\":\"%s\","
              "\"stream\":\"%s\"}", client_id, RTZ_LOCAL_IP, app, tc_url, stream_name);
-    http_hook_query(loop, buf, 0, NULL, NULL);
+    http_hook_query(loop, buf, client_id, NULL, NULL);
 }
 
 void http_hook_on_close(zl_loop_t *loop, const char *app, const char *tc_url,
@@ -231,5 +231,24 @@ void http_hook_on_close(zl_loop_t *loop, const char *app, const char *tc_url,
              "\"recv_bytes\":%ld,"
              "\"clientType\":\"play\"}", client_id,
              RTZ_LOCAL_IP, app, tc_url, stream_name, send_bytes, recv_bytes);
-    http_hook_query(loop, buf, 0, NULL, NULL);
+    http_hook_query(loop, buf, client_id, NULL, NULL);
+}
+void http_hook_on_timer_report(zl_loop_t *loop, const char *app, const char *tc_url, const char *stream_name,
+    long recv_bytes, long send_bytes, long client_id)
+{
+    char buf[1024];
+    snprintf(buf, sizeof(buf), "{"
+        "\"action\":\"on_timer_report\","
+        "\"client_id\":\"%ld\","
+        "\"ip\": \"%s\","
+        "\"vhost\":\"__defaultVhost__\","
+        "\"duration\":3600000,"
+        "\"app\":\"%s\","
+        "\"tcUrl\":\"%s\","
+        "\"stream\":\"%s\","
+        "\"send_bytes\":%ld,"
+        "\"recv_bytes\":%ld,"
+        "\"clientType\":\"play\"}", client_id,
+        RTZ_LOCAL_IP, app, tc_url, stream_name, send_bytes, recv_bytes);
+    http_hook_query(loop, buf, client_id, NULL, NULL);
 }

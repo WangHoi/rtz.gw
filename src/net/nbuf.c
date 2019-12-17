@@ -1,4 +1,4 @@
-#include "nbuf.h"
+﻿#include "nbuf.h"
 #include "list.h"
 #include "log.h"
 #include "macro_util.h"
@@ -200,7 +200,7 @@ int nbuf_reserve(nbuf_t *buf, struct iovec *iov, int *iov_cnt)
     int size;
     int n = 1;
     struct nbuf_chunk *c = get_last_chunk(buf);
-    if (!c) {
+    if (!c || c->tail == buf->chunk_capacity) {
         c = nbuf_chunk_new(buf);
         iov[0].iov_base = c->data;
         iov[0].iov_len = buf->chunk_capacity;

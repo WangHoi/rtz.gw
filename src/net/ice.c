@@ -1,4 +1,4 @@
-#include "ice.h"
+﻿#include "ice.h"
 #include "sbuf.h"
 #include "event_loop.h"
 #include "tcp_chan.h"
@@ -176,7 +176,8 @@ struct ice_agent_t {
     struct list_head pkt_list;          /* only RTP,RTCP */
 
     int cand_state;
-    int no_errlog;  /* Suppress error log */
+    int no_errlog;                      /* Suppress error log */
+    long long err_time;          /* error tracking */
     struct list_head link;
 };
 
@@ -481,6 +482,8 @@ void stun_handler(ice_server_t *srv, const void *data, int size,
         sbuf_strcpy(agent->stream->ruser, ufrag2);
         memcpy(&agent->peer_addr, addr, addrlen);
         agent->peer_tcp = tcp_chan;
+        agent->no_errlog = 0;
+        agent->err_time = 0;
         chan_udata->agent = agent;
         if (stun_msg_find_attr(msg_hdr, STUN_ATTR_USE_CANDIDATE))
             agent->cand_state = ICE_CAND_STATE_NOMINATED;
@@ -685,6 +688,7 @@ int ice_component_send(ice_component_t *component, const void *data, int size)
         if (!agent->no_errlog) {
             /* suppress error log */
             agent->no_errlog = 1;
+            agent->err_time = zl_time();
             LLOG(LL_ERROR, "rtz_handle %p ice_agent %p component_send failed, no valid candidate pair.",
                  agent->rtz_handle, agent);
         }
@@ -1034,6 +1038,7 @@ void ice_tcp_error_cleanup(tcp_chan_t *chan, struct ice_tcp_chan_udata *chan_uda
             agent->peer_tcp = NULL;
             agent->cand_state = ICE_CAND_STATE_EMPTY;
             agent->no_errlog = 0;
+            agent->err_time = zl_timestamp();
             //ice_webrtc_hangup(agent, "TcpSocket Error");
         }
     }
@@ -1292,4 +1297,9 @@ void update_stats(ice_component_t *component, ice_queued_packet_t *pkt)
     if (stream->agent->peer_tcp)
         len += 2; /* 2 bytes frame header */
     rtz_update_stats(stream->agent->rtz_handle, 0, len);
+}
+
+long long ice_get_err_time(ice_agent_t *agent)
+{
+    return agent ? agent->err_time : 0;
 }

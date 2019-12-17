@@ -1,6 +1,19 @@
 = CHANGELOG
 Hoi Wang <wanghoi@126.com>
 
+== 0.2.4
+
+12/??/2019
+
+- report bandwidth in on_timer_event 
+
+== 0.2.3
+
+11/21/2019
+
+- RTMP 'redirect' source support
+- Fix bug
+
 == 0.2.2
 
 07/01/2019

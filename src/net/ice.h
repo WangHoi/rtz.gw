@@ -1,4 +1,4 @@
-/** @file ice.h
+﻿/** @file ice.h
  *  ICE-Lite implementation.
  *
  *  Contains prototypes for ICE agent.
@@ -107,5 +107,7 @@ void ice_send_rtcp(ice_agent_t *agent, int video, const void *data, int size);
 void ice_send_dtls(ice_agent_t *agent, const void *data, int size);
 
 void ice_prepare_video_keyframe(ice_agent_t *agent);
+
+long long ice_get_err_time(ice_agent_t *agent);
 
 enum ice_payload_type ice_get_payload_type(const void *data, int size);

@@ -1,4 +1,4 @@
-#include "rtp_mux.h"
+﻿#include "rtp_mux.h"
 #include "sbuf.h"
 #include "sdp.h"
 #include "codec_types.h"
@@ -86,6 +86,7 @@ void rtp_mux_h264(rtp_mux_t *ctx, uint32_t timestamp, const void *data, int size
     //LLOG(LL_TRACE, "%d %d %d", (int)nalu_hdr->type, ctx->sps->size, ctx->pps->size);
     if (kf) {
         if (!sbuf_empty(ctx->sps)) {
+#if 1
             /* WebRTC playout-delay extension
              *
              *   0                   1                   2                   3
@@ -105,6 +106,11 @@ void rtp_mux_h264(rtp_mux_t *ctx, uint32_t timestamp, const void *data, int size
                 ctx->cb(video, kf, buf, sizeof(rtp_header_t) + 8 + ctx->sps->size, ctx->udata);
 
             hdr->extension = 0; /* rtp header will be reused */
+#endif
+            pack_be16(&hdr->seqnum, ctx->seqnum[video]++);
+            memcpy(buf + sizeof(rtp_header_t), ctx->sps->data, ctx->sps->size);
+            if (ctx->cb)
+                ctx->cb(video, kf, buf, sizeof(rtp_header_t) + ctx->sps->size, ctx->udata);
         }
         if (!sbuf_empty(ctx->pps)) {
             pack_be16(&hdr->seqnum, ctx->seqnum[video]++);

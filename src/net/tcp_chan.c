@@ -1,4 +1,4 @@
-#include "tcp_chan.h"
+﻿#include "tcp_chan.h"
 #include "nbuf.h"
 #include "net_util.h"
 #include "event_loop.h"
@@ -19,6 +19,7 @@ enum {
 enum {
     TCP_CHAN_SND_BUF_SIZE = 65536,
     TCP_CHAN_RCV_BUF_SIZE = 65536,
+    TCP_MAX_EINTR_RETRY = 3,
 };
 
 enum {
@@ -108,13 +109,16 @@ tcp_chan_t *tcp_chan_accept(zl_loop_t *loop, int listenfd)
 {
     socklen_t addr_len = sizeof(struct sockaddr_storage);
     tcp_chan_t *chan = malloc(sizeof(tcp_chan_t));
+    int again_count = 0;
     memset(chan, 0, sizeof(tcp_chan_t));
     chan->loop = loop;
 again:
     chan->fd = accept4(listenfd, (struct sockaddr*)&chan->addr, &addr_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
     if (chan->fd == -1) {
-        if (errno == EINTR)
+        if (errno == EINTR && again_count < TCP_MAX_EINTR_RETRY) {
+            ++again_count;
             goto again;
+        }
         goto err_out;
     }
     //LLOG(LL_TRACE, "new fd %d", chan->fd);
@@ -239,6 +243,7 @@ void chan_fd_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata
     int n, iov_cnt, err = 0;
     struct iovec iov[2];
     tcp_chan_t *chan = udata;
+    int again_count = 0;
     if (chan->flags & TCP_CHAN_ERROR)
         return;
 
@@ -253,8 +258,10 @@ read_again:
             err = 0;
             chan->flags |= TCP_CHAN_ERROR;
         } else if (n == -1) {
-            if (errno == EINTR)
+            if (errno == EINTR && again_count < TCP_MAX_EINTR_RETRY) {
+                ++again_count;
                 goto read_again;
+            }
             if (errno != EAGAIN) {
                 err = -errno;
                 chan->flags |= TCP_CHAN_ERROR;
@@ -283,7 +290,7 @@ read_again:
                 chan->flags |= TCP_CHAN_ERROR;
             }
         } else if (!nbuf_empty(chan->snd_buf)) {
-            int old, iov_cnt;
+            int old, iov_cnt, again_count = 0;
 write_again:
             old = nbuf_size(chan->snd_buf);
             iov_cnt = nbuf_peekv(chan->snd_buf, iov, ARRAY_SIZE(iov), &old);
@@ -295,8 +302,8 @@ write_again:
             if (n > 0) {
                 nbuf_consume(chan->snd_buf, n);
             } else if (n == -1) {
-                if (errno == EINTR) {
-                    LLOG(LL_TRACE, "EINTR");
+                if (errno == EINTR && again_count < TCP_MAX_EINTR_RETRY) {
+                    ++again_count;
                     goto write_again;
                 }
                 if (errno != EAGAIN) {

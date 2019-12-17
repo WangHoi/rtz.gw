@@ -1,4 +1,4 @@
-#include "log.h"
+﻿#include "log.h"
 #include "event_loop.h"
 #include "mpsc_queue.h"
 //#include "rtsp_client.h"
@@ -77,8 +77,8 @@ static void test_http_hooks(zl_loop_t *loop)
 
 int main(int argc, char *argv[])
 {
-    srand48(0);
-    srand(0);
+    srand48(time(NULL));
+    srand(time(NULL));
 
     sigset_t mask;
     int sfd;
@@ -120,7 +120,6 @@ int main(int argc, char *argv[])
         ? RTMP_LOCAL_PORT + 50
         : RTMP_LOCAL_PORT + 500;
     cfg_del(cfg);
-
     LLOG(LL_INFO, "#RTZ_VERSION=%s %s", RTZ_VERSION, __DATE__);
     LLOG(LL_INFO, "#WITH_WSS=%d",
 #if WITH_WSS

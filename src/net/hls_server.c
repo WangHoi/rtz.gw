@@ -50,11 +50,11 @@ enum {
     HLS_NO_OUTPUT_CLEANUP_TIMEOUT_MSECS = 30000,
     HLS_CRON_TIMEOUT_MSECS = 1000,
     DEFAULT_VOD_DURATION = 0,
-    EVICT_FRAG_THREHOLD = 6,
+    EVICT_FRAG_THREHOLD = 5,
     PAUSE_RTMP_FRAG_THREHOLD = 12,
     RESUME_RTMP_FRAG_THREHOLD = 8,
 
-    HLS_EARLY_FRAGMENTS = 2,
+    HLS_EARLY_FRAGMENTS = 1,
 };
 
 typedef struct http_peer_t http_peer_t;
@@ -108,6 +108,7 @@ struct hls_stream_t {
     hls_fragment_t *buffering_frag;     /* buffering */
     unsigned long next_frag_seq;
     unsigned long media_seq;            /* incr when .m3u8 changed */
+    unsigned long max_fetched_frag_seq;
     struct list_head media_frag_list;
     fmp4_mux_t *mux_ctx;
     int mux_started;
@@ -340,7 +341,7 @@ void send_final_reply(http_peer_t *peer, http_status_t status)
         tcp_chan_write(peer->chan, s, n);
         free(s);
     }
-    peer->flag |= HTTP_PEER_CLOSE_ASAP;
+    //peer->flag |= HTTP_PEER_CLOSE_ASAP;
 }
 
 void send_reply_data(http_peer_t *peer, const void *data, int size)
@@ -359,7 +360,7 @@ void send_reply_data(http_peer_t *peer, const void *data, int size)
     tcp_chan_write(peer->chan, s, n);
     free(s);
     tcp_chan_write(peer->chan, data, size);
-    peer->flag |= HTTP_PEER_CLOSE_ASAP;
+    //peer->flag |= HTTP_PEER_CLOSE_ASAP;
 }
 void http_request_handler(http_peer_t *peer, http_request_t *req)
 {
@@ -432,7 +433,7 @@ void http_request_handler(http_peer_t *peer, http_request_t *req)
         if (stream->next_frag_seq > HLS_EARLY_FRAGMENTS) {
             send_reply_data(peer, stream->m3u8_buf->data, stream->m3u8_buf->size);
         } else {
-            LLOG(LL_TRACE, "peer %p init_wait", peer);
+            LLOG(LL_TRACE, "init_wait peer %p", peer);
             peer->flag |= HTTP_PEER_INIT_WAIT;
         }
     } else if (sbuf_ends_withi(peer->url_path, ".mp4")) {
@@ -454,6 +455,8 @@ void http_request_handler(http_peer_t *peer, http_request_t *req)
             if (frag) {
                 //LLOG(LL_TRACE, "fetch frag %lu end=%lu", frag->seq, stream->next_frag_seq);
                 frag->fetched = 1;
+                if (stream->max_fetched_frag_seq < frag->seq)
+                    stream->max_fetched_frag_seq = frag->seq;
                 /* update stats */
                 stream->recv_bytes += req->full_len;
                 stream->last_out_time = zl_time();
@@ -665,9 +668,15 @@ void rtmp_video_handler(int64_t timestamp, uint16_t sframe_time,
         return;
 
     if (key_frame) {
+        if (h->buffering_frag->seq == 0 && fmp4_mux_duration(h->mux_ctx, timestamp * 90) < 0.1) {
+            LLOG(LL_DEBUG, "stream %p first key frame", h);
+        }
         /* avoid too short fragment */
         if (h->mux_started && fmp4_mux_duration(h->mux_ctx, timestamp * 90) >= 0.9) {
             hls_fragment_t *frag = h->buffering_frag;
+            if (frag->seq <= HLS_EARLY_FRAGMENTS + 1) {
+                LLOG(LL_DEBUG, "stream %p gop seq %lu closed, next k-frame received", h, frag->seq);
+            }
             fmp4_mux_media_end(h->mux_ctx,
                 frag->seq, timestamp * 90, frag->data_buf, &frag->duration);
             //LLOG(LL_DEBUG, "mux_duration=%.2lf", frag->duration);
@@ -807,19 +816,22 @@ void check_stream_congestion(hls_stream_t *h)
     if (!list_empty(&h->media_frag_list)) {
         hls_fragment_t *first_frag = list_entry(h->media_frag_list.next, hls_fragment_t, link);
         hls_fragment_t *last_frag = list_entry(h->media_frag_list.prev, hls_fragment_t, link);
-        nfrags = last_frag->seq - first_frag->seq + 1;
+        nfrags = last_frag->seq - first_frag->seq;
     }
 
     if (h->paused) {
         if (nfrags <= RESUME_RTMP_FRAG_THREHOLD) {
-            LLOG(LL_TRACE, "unblock %s", h->stream_name->data);
-            rtmp_client_leave_blocking(h->rtmp_client);
+            LLOG(LL_TRACE, "resume %s", h->stream_name->data);
+            //rtmp_client_leave_blocking(h->rtmp_client);
+            h->last_in_time = zl_time(); /* MARK as input */
+            rtmp_client_resume(h->rtmp_client, NULL);
             h->paused = 0;
         }
     } else {
         if (nfrags > PAUSE_RTMP_FRAG_THREHOLD) {
-            LLOG(LL_TRACE, "block %s", h->stream_name->data);
-            rtmp_client_enter_blocking(h->rtmp_client);
+            LLOG(LL_TRACE, "pause %s", h->stream_name->data);
+            //rtmp_client_enter_blocking(h->rtmp_client);
+            rtmp_client_pause(h->rtmp_client, NULL);
             h->paused = 1;
         }
     }
@@ -903,8 +915,11 @@ void hls_server_cron(zl_loop_t *loop, int timerid, void *udata)
         /* No player timeout */
         expire_timeout = HLS_NO_OUTPUT_CLEANUP_TIMEOUT_MSECS + lrand48() % 1000;
         if (now > stream->last_out_time + expire_timeout) {
-            LLOG(LL_ERROR, "hls_stream_t %p(%s) output timeout %lld ms", stream,
-                stream->stream_name->data, now - stream->last_out_time);
+            if (!stream->eof) { /* log error on non-eof case */
+                LLOG(LL_ERROR, "hls_stream_t %p(%s) output timeout %lld ms, max_fetched=%lu, last_seq=%lu", stream,
+                    stream->stream_name->data, now - stream->last_out_time,
+                    stream->max_fetched_frag_seq, stream->next_frag_seq - 2);
+            }
             hls_stream_del(stream);
             continue;
         }
@@ -912,8 +927,9 @@ void hls_server_cron(zl_loop_t *loop, int timerid, void *udata)
         /* No source force EOF timeout */
         expire_timeout = HLS_NO_VIDEO_EOF_TIMEOUT_MSECS + lrand48() % 1000;
         if (!stream->paused && now > stream->last_in_time + expire_timeout && !stream->eof) {
-            LLOG(LL_ERROR, "hls_stream_t %p(%s) EOF after %lld ms", stream,
-                stream->stream_name->data, now - stream->last_in_time);
+            LLOG(LL_INFO, "hls_stream_t %p(%s) EOF after %lld ms, last_seq=%lu", stream,
+                stream->stream_name->data, now - stream->last_in_time, stream->next_frag_seq - 2);
+            stream->last_in_time = zl_time(); /* MARK eof as input */
             stream->eof = 1;
             update_stream_m3u8_buf(stream);
             continue;
@@ -922,10 +938,13 @@ void hls_server_cron(zl_loop_t *loop, int timerid, void *udata)
         /* No source timeout */
         expire_timeout = HLS_NO_VIDEO_CLEANUP_TIMEOUT_MSECS + lrand48() % 1000;
         if (!stream->paused && now > stream->last_in_time + expire_timeout) {
-            LLOG(LL_ERROR, "hls_stream_t %p(%s) input timeout %lld ms", stream,
-                stream->stream_name->data, now - stream->last_in_time);
-            hls_stream_del(stream);
-            continue;
+            LLOG(LL_INFO, "max_fetched=%lu, last_seq=%lu", stream->max_fetched_frag_seq, stream->next_frag_seq - 2);
+            if (stream->max_fetched_frag_seq == stream->next_frag_seq - 2) {
+                LLOG(LL_ERROR, "hls_stream_t %p(%s) input timeout %lld ms", stream,
+                    stream->stream_name->data, now - stream->last_in_time);
+                hls_stream_del(stream);
+                continue;
+            }
         }
 
     }

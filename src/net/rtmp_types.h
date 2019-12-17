@@ -132,7 +132,9 @@ unsigned char rtmp_chunk_header_fmt(unsigned char hdr0);
 unsigned char rtmp_chunk_header_len(unsigned char fmt);
 unsigned char rtmp_chunk_channel(unsigned char hdr0);
 
-void rtmp_write_pong(const char *ev_data, int ev_size,
+void rtmp_write_ping(const void *ev_data, int ev_size,
+    rtmp_write_cb write_cb, void *udata);
+void rtmp_write_pong(const void *ev_data, int ev_size,
                      rtmp_write_cb write_cb, void *udata);
 int rtmp_write_header0(void* data, unsigned char chunk_channel, uint32_t timestamp,
                        uint32_t body_size, rtmp_message_type_t msg_type, uint32_t msg_stream_id);

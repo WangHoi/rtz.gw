@@ -63,6 +63,7 @@ enum {
     /** Time before release rtz_stream_t */
     RTZ_NO_VIDEO_TIMEOUT_MSECS = 15000,
     RTZ_CRON_TIMEOUT_MSECS = 1000,
+    RTZ_TIME_REPORT_MSECS = 3600000,
 };
 
 typedef struct http_peer_t http_peer_t;
@@ -151,6 +152,7 @@ typedef struct rtz_handle_t {
     int sdp_version;
 
     long hook_client_id;            /* http hook, -1 if invalid */
+    long long last_report_time;
     long recv_bytes;
     long send_bytes;
 
@@ -715,10 +717,11 @@ void parse_url(rtz_handle_t *h, const char *url)
         sbuf_strcpy(h->app, "live");
     }
     p = strrchr(url, '/');
-    if (p) {
+    if (p > url + 7) {
         sbuf_strcpy(h->stream_name, p + 1);
         sbuf_strncpy(h->tc_url, url, p - url);
     } else {
+        sbuf_clear(h->stream_name);
         sbuf_strcpy(h->tc_url, url);
     }
     LLOG(LL_TRACE, "parse_url('%s'): app='%s' tcUrl='%s' streamName='%s'",
@@ -757,6 +760,7 @@ void create_handle(http_peer_t *peer, const char *transaction, const char *sessi
     handle->ice = ice_agent_new(peer->srv->ice_srv, handle);
     list_add(&handle->link, &session->handle_list);
     handle->stream = find_stream(peer->srv, handle->stream_name->data);
+    handle->last_report_time = zl_time();
 
     /* hook */
     if (!handle->url_redirect) {
@@ -1173,10 +1177,13 @@ void rtz_stream_push_video(rtz_stream_t *stream, int64_t rtp_ts, uint16_t sframe
     long long now = zl_time();
     stream->sframe_time = sframe_time;
 
-    //if (!strncmp(stream->stream_name->data, "realTime_HP", 11)) {
-        //LLOG(LL_DEBUG, "rtp=%"PRId64", size=%d, type=%hhx", rtp_ts, size, ((uint8_t*)data)[0] & 0x1f);
-        //rtp_ts = stream->counter++ * 3597;
-    //}
+    /*
+    const char *test_url_prefix = "realTime_01101002D8F0612FD_0_0";
+    if (!strncmp(stream->stream_name->data, test_url_prefix, strlen(test_url_prefix))) {
+        LLOG(LL_DEBUG, "rtmp_ts=%"PRId64", size=%d, type=%hhx", rtp_ts / 90, size, ((uint8_t*)data)[0] & 0x1f);
+        rtp_ts = stream->counter++ * 3597;
+    }
+    */
 #if 0
     if (stream->first_in_time > 0) {
         int64_t drift = (now - stream->first_in_time) - (rtp_ts - stream->first_rtp_ts) / 90;
@@ -1341,12 +1348,13 @@ void rtz_server_kick_stream(rtz_server_t *srv, const char *tc_url, const char *s
     }
 }
 
-/* Write 12 bit min_playout_delay in 10ms granularity */
+/* Write 12 bit min_playout_delay and 12 bit max_playout_delay in 10ms granularity */
 static inline void update_playout_delay_ext(uint8_t *ext, uint16_t min_delay)
 {
     uint16_t d = min_delay / 10;
     ext[1] = (d >> 4) & 0xff;
-    ext[2] = ((d << 4) & 0xf0) | (ext[2] & 0x0f);
+    ext[2] = ((d << 4) & 0xf0) | ((d >> 8) & 0x0f);
+    ext[3] = (d & 0xff);
 }
 
 void rtp_mux_handler(int video, int kf, void *data, int size, void *udata)
@@ -1368,8 +1376,8 @@ void rtp_mux_handler(int video, int kf, void *data, int size, void *udata)
         }
         if (playout_delay_ext_ref) {
             const uint16_t frame_time = stream->sframe_time ?: 40;
-            //update_playout_delay_ext(playout_delay_ext_ref,
-            //                         frame_time * handle->min_playout_delay);
+            update_playout_delay_ext(playout_delay_ext_ref,
+                                     frame_time * handle->min_playout_delay);
             ice_prepare_video_keyframe(handle->ice);
         }
         send_rtp(handle, video, data, size);
@@ -1486,6 +1494,8 @@ void rtz_server_cron(zl_loop_t *loop, int timerid, void *udata)
 {
     rtz_server_t *srv = udata;
     rtz_stream_t *stream, *tmp;
+    rtz_session_t *session, *stmp;
+    rtz_handle_t *h, *htmp;
     long long now = zl_time();
     list_for_each_entry_safe(stream, tmp, &srv->stream_list, link) {
         long long expire_timeout = RTZ_NO_VIDEO_TIMEOUT_MSECS + lrand48() % 1000;
@@ -1493,6 +1503,39 @@ void rtz_server_cron(zl_loop_t *loop, int timerid, void *udata)
             LLOG(LL_ERROR, "rtz_stream_t %p(%s) timeout %lld ms", stream,
                     stream->stream_name->data, now - stream->last_out_time);
             rtz_stream_del(stream);
+        }
+    }
+    list_for_each_entry_safe(session, stmp, &srv->session_list, link) {
+        list_for_each_entry_safe(h, htmp, &session->handle_list, link) {
+            if (h->last_report_time + RTZ_TIME_REPORT_MSECS < now) {
+                /* http hook */
+                if (h->hook_client_id != -1) {
+                    http_hook_on_timer_report(h->loop, h->app->data, h->tc_url->data, h->stream_name->data,
+                        h->recv_bytes, h->send_bytes, h->hook_client_id);
+                }
+                h->last_report_time = now;
+                h->send_bytes = 0;
+                h->recv_bytes = 0;
+            }
+
+            auto err_time = ice_get_err_time(h->ice);
+            if (err_time && err_time + RTZ_NO_VIDEO_TIMEOUT_MSECS < now) {
+                LLOG(LL_ERROR, "rtz_handle_t %p timeout %lld ms", h, now - err_time);
+                h->stream = NULL;
+                list_del(&h->stream_link);
+                if (h->ice) {
+                    {
+                        cJSON *json = cJSON_CreateObject();
+                        cJSON_AddStringToObject(json, "type", "destroyed");
+                        cJSON_AddStringToObject(json, "session_id", h->session->id->data);
+                        cJSON_AddStringToObject(json, "sender", h->id->data);
+                        send_json(h->session->peer, json);
+                        cJSON_Delete(json);
+                    }
+                    ice_webrtc_hangup(h->ice, "ICE lost");
+                    rtz_handle_del(h);
+                }
+            }
         }
     }
 }

@@ -14,7 +14,7 @@ rtz.init = function(options) {
 		rtz.error = console.error.bind(console);
 		rtz.warn = console.warn.bind(console);
 		rtz.info = console.info.bind(console);
-		rtz.debug = console.debug.bind(console);
+		rtz.debug = rtz.noop; //console.debug.bind(console);
 		rtz.trace = console.trace.bind(console);
 
 		// Helper methods to attach/reattach a stream to a video element (previously part of adapter.js)
@@ -108,7 +108,7 @@ function RtzSession(gatewayCallbacks) {
 
     var connected = false;
     var sessionId = null;
-    var streamHandles = {};
+    var pluginHandles = {};
     var that = this;
     var transactions = {};
     createSession(gatewayCallbacks);
@@ -164,15 +164,15 @@ function RtzSession(gatewayCallbacks) {
 				rtz.warn("Missing sender...");
 				return;
 			}
-			var streamHandle = streamHandles[sender];
-			if(streamHandle === undefined || streamHandle === null) {
+			var pluginHandle = pluginHandles[sender];
+			if(pluginHandle === undefined || pluginHandle === null) {
 				rtz.debug("This handle is not attached to this session");
 				return;
 			}
 			var candidate = json["candidate"];
 			rtz.debug("Got a trickled candidate on session " + sessionId);
 			rtz.debug(candidate);
-			var config = streamHandle.webrtcStuff;
+			var config = pluginHandle.webrtcStuff;
 			if(config.pc && config.remoteSdp) {
 				// Add candidate right now
 				rtz.debug("Adding remote candidate:", candidate);
@@ -200,12 +200,12 @@ function RtzSession(gatewayCallbacks) {
 				rtz.warn("Missing sender...");
 				return;
 			}
-			var streamHandle = streamHandles[sender];
-			if(streamHandle === undefined || streamHandle === null) {
+			var pluginHandle = pluginHandles[sender];
+			if(pluginHandle === undefined || pluginHandle === null) {
 				rtz.debug("This handle is not attached to this session");
 				return;
 			}
-			streamHandle.webrtcState(true);
+			pluginHandle.webrtcState(true);
 			return;
 		} else if(json["type"] === "destroyed") {
 			// Server asked us to destroy one of our handles
@@ -216,14 +216,14 @@ function RtzSession(gatewayCallbacks) {
 				rtz.warn("Missing sender...");
 				return;
 			}
-			var streamHandle = streamHandles[sender];
-			if(streamHandle === undefined || streamHandle === null) {
+			var pluginHandle = pluginHandles[sender];
+			if(pluginHandle === undefined || pluginHandle === null) {
 				// Don't warn here because destroyHandle causes this situation.
 				return;
 			}
-			streamHandle.destroyed = true;
-			streamHandle.ondestroyed();
-			streamHandle.destroy();
+			pluginHandle.destroyed = true;
+			pluginHandle.ondestroyed();
+			pluginHandle.destroy();
 		} else if(json["type"] === "media") {
 			// Media started/stopped flowing
 			rtz.debug("Got a media event on session " + sessionId);
@@ -233,12 +233,12 @@ function RtzSession(gatewayCallbacks) {
 				rtz.warn("Missing sender...");
 				return;
 			}
-			var streamHandle = streamHandles[sender];
-			if(streamHandle === undefined || streamHandle === null) {
+			var pluginHandle = pluginHandles[sender];
+			if(pluginHandle === undefined || pluginHandle === null) {
 				rtz.debug("This handle is not attached to this session");
 				return;
 			}
-			streamHandle.mediaState(json["type"], json["receiving"]);
+			pluginHandle.mediaState(json["type"], json["receiving"]);
 		} else if(json["type"] === "slowlink") {
 			rtz.debug("Got a slowlink event on session " + sessionId);
 			rtz.debug(json);
@@ -248,12 +248,12 @@ function RtzSession(gatewayCallbacks) {
 				rtz.warn("Missing sender...");
 				return;
 			}
-			var streamHandle = streamHandles[sender];
-			if(streamHandle === undefined || streamHandle === null) {
+			var pluginHandle = pluginHandles[sender];
+			if(pluginHandle === undefined || pluginHandle === null) {
 				rtz.debug("This handle is not attached to this session");
 				return;
 			}
-			streamHandle.slowLink(json["uplink"], json["nacks"]);
+			pluginHandle.slowLink(json["uplink"], json["nacks"]);
 		} else if(json["type"] === "error") {
 			// Oops, something wrong happened
 			rtz.error("Ooops: " + json["error"].code + " " + json["error"].reason);	// FIXME
@@ -277,8 +277,8 @@ function RtzSession(gatewayCallbacks) {
 			}
 			var data = json["data"];
 			rtz.debug(data);
-			var streamHandle = streamHandles[sender];
-			if(streamHandle === undefined || streamHandle === null) {
+			var pluginHandle = pluginHandles[sender];
+			if(pluginHandle === undefined || pluginHandle === null) {
 				rtz.warn("This handle is not attached to this session");
 				return;
 			}
@@ -287,7 +287,7 @@ function RtzSession(gatewayCallbacks) {
 				rtz.debug("Handling SDP as well...");
 				rtz.debug(jsep);
 			}
-			var callback = streamHandle.onmessage;
+			var callback = pluginHandle.onmessage;
 			if(callback !== null && callback !== undefined) {
 				rtz.debug("Notifying application...");
 				// Send to callback specified when attaching stream handle
@@ -471,7 +471,7 @@ function RtzSession(gatewayCallbacks) {
 		var opaqueId = callbacks.opaqueId;
 		var url = callbacks.url;
 		var transport = callbacks.transport || "udp";
-		var min_delay = callbacks.min_delay || 0;
+		var min_delay = callbacks.min_delay || 8;
 		var redirect = callbacks.redirect || 0;
 		var transaction = rtz.randomString(12);
 		var request = {
@@ -492,7 +492,7 @@ function RtzSession(gatewayCallbacks) {
             }
             var handleId = json["id"];
             rtz.log("Created handle: " + handleId);
-            var streamHandle = {
+            var pluginHandle = {
                 session : that,
 				id : handleId,
 				url : url,
@@ -540,10 +540,10 @@ function RtzSession(gatewayCallbacks) {
                 webrtcState : callbacks.webrtcState,
                 slowLink : callbacks.slowLink,
                 onmessage : callbacks.onmessage,
-                //createOffer : function(callbacks) { prepareWebrtc(handleId, callbacks); },
+                createOffer : function(callbacks) { prepareWebrtc(handleId, callbacks); },
                 createAnswer : function(callbacks) { prepareWebrtc(handleId, callbacks); },
-                //handleRemoteJsep : function(callbacks) { prepareWebrtcPeer(handleId, callbacks); },
-                //onlocalstream : callbacks.onlocalstream,
+                handleRemoteJsep : function(callbacks) { prepareWebrtcPeer(handleId, callbacks); },
+                onlocalstream : callbacks.onlocalstream,
                 onremotestream : callbacks.onremotestream,
                 //ondata : callbacks.ondata,
                 //ondataopen : callbacks.ondataopen,
@@ -551,8 +551,8 @@ function RtzSession(gatewayCallbacks) {
                 ondestroyed : callbacks.ondestroyed,
                 destroy : function(callbacks) { destroyHandle(handleId, callbacks); }
             };
-			streamHandles[handleId] = streamHandle;
-            callbacks.success(streamHandle);
+			pluginHandles[handleId] = pluginHandle;
+            callbacks.success(pluginHandle);
         };
         request["session_id"] = sessionId;
         ws.send(JSON.stringify(request));
@@ -568,9 +568,9 @@ function RtzSession(gatewayCallbacks) {
 			callbacks.error("Is the server down? (connected=false)");
 			return;
 		}
-		var streamHandle = streamHandles[handleId];
-		if(streamHandle === null || streamHandle === undefined ||
-				streamHandle.webrtcStuff === null || streamHandle.webrtcStuff === undefined) {
+		var pluginHandle = pluginHandles[handleId];
+		if(pluginHandle === null || pluginHandle === undefined ||
+				pluginHandle.webrtcStuff === null || pluginHandle.webrtcStuff === undefined) {
 			rtz.warn("Invalid handle");
 			callbacks.error("Invalid handle");
 			return;
@@ -618,7 +618,7 @@ function RtzSession(gatewayCallbacks) {
 			rtz.warn("Is the server down? (connected=false)");
 			return;
 		}
-		var pluginHandle = streamHandles[handleId];
+		var pluginHandle = pluginHandles[handleId];
 		if(pluginHandle === null || pluginHandle === undefined ||
 				pluginHandle.webrtcStuff === null || pluginHandle.webrtcStuff === undefined) {
 			rtz.warn("Invalid handle");
@@ -642,10 +642,10 @@ function RtzSession(gatewayCallbacks) {
 			asyncRequest = (callbacks.asyncRequest === true);
 		rtz.log("Destroying handle " + handleId + " (async=" + asyncRequest + ")");
 		cleanupWebrtc(handleId);
-		var streamHandle = streamHandles[handleId];
-		if(streamHandle === null || streamHandle === undefined || streamHandle.destroyed) {
+		var pluginHandle = pluginHandles[handleId];
+		if(pluginHandle === null || pluginHandle === undefined || pluginHandle.destroyed) {
 			// Plugin was already destroyed by server, calling destroy again will return a handle not found error, so just exit here
-			delete streamHandles[handleId];
+			delete pluginHandles[handleId];
 			callbacks.success();
 			return;
 		}""
@@ -658,23 +658,209 @@ function RtzSession(gatewayCallbacks) {
         request["session_id"] = sessionId;
         request["handle_id"] = handleId;
         ws.send(JSON.stringify(request));
-        delete streamHandles[handleId];
+        delete pluginHandles[handleId];
         callbacks.success();
         return;
+	}
+
+	function prepareWebrtcPeer(handleId, callbacks) {
+		callbacks = callbacks || {};
+		callbacks.success = (typeof callbacks.success == "function") ? callbacks.success : rtz.noop;
+		callbacks.error = (typeof callbacks.error == "function") ? callbacks.error : webrtcError;
+		var jsep = callbacks.jsep;
+		var pluginHandle = pluginHandles[handleId];
+		if(pluginHandle === null || pluginHandle === undefined ||
+				pluginHandle.webrtcStuff === null || pluginHandle.webrtcStuff === undefined) {
+			rtz.warn("Invalid handle");
+			callbacks.error("Invalid handle");
+			return;
+		}
+		var config = pluginHandle.webrtcStuff;
+		if(jsep !== undefined && jsep !== null) {
+			if(config.pc === null) {
+				rtz.warn("Wait, no PeerConnection?? if this is an answer, use createAnswer and not handleRemoteJsep");
+				callbacks.error("No PeerConnection: if this is an answer, use createAnswer and not handleRemoteJsep");
+				return;
+			}
+			config.pc.setRemoteDescription(jsep)
+				.then(function() {
+					rtz.log("Remote description accepted!");
+					config.remoteSdp = jsep.sdp;
+					// Any trickle candidate we cached?
+					if(config.candidates && config.candidates.length > 0) {
+						for(var i in config.candidates) {
+							var candidate = config.candidates[i];
+							rtz.debug("Adding remote candidate:", candidate);
+							if(!candidate || candidate.completed === true) {
+								// end-of-candidates
+								config.pc.addIceCandidate();
+							} else {
+								// New candidate
+								config.pc.addIceCandidate(candidate);
+							}
+						}
+						config.candidates = [];
+					}
+					// Done
+					callbacks.success();
+				}, callbacks.error);
+		} else {
+			callbacks.error("Invalid JSEP");
+		}
+	}
+
+	function createOffer(handleId, media, callbacks) {
+		callbacks = callbacks || {};
+		callbacks.success = (typeof callbacks.success == "function") ? callbacks.success : rtz.noop;
+		callbacks.error = (typeof callbacks.error == "function") ? callbacks.error : rtz.noop;
+		var pluginHandle = pluginHandles[handleId];
+		if(pluginHandle === null || pluginHandle === undefined ||
+				pluginHandle.webrtcStuff === null || pluginHandle.webrtcStuff === undefined) {
+			rtz.warn("Invalid handle");
+			callbacks.error("Invalid handle");
+			return;
+		}
+		var config = pluginHandle.webrtcStuff;
+		var simulcast = callbacks.simulcast === true ? true : false;
+		if(!simulcast) {
+			rtz.log("Creating offer (iceDone=" + config.iceDone + ")");
+		} else {
+			rtz.log("Creating offer (iceDone=" + config.iceDone + ", simulcast=" + simulcast + ")");
+		}
+		// https://code.google.com/p/webrtc/issues/detail?id=3508
+		var mediaConstraints = {};
+		if(rtz.webRTCAdapter.browserDetails.browser === "firefox" && rtz.webRTCAdapter.browserDetails.version >= 59) {
+			// Firefox >= 59 uses Transceivers
+			var audioTransceiver = null, videoTransceiver = null;
+			var transceivers = config.pc.getTransceivers();
+			if(transceivers && transceivers.length > 0) {
+				for(var i in transceivers) {
+					var t = transceivers[i];
+					if((t.sender && t.sender.track && t.sender.track.kind === "audio") ||
+							(t.receiver && t.receiver.track && t.receiver.track.kind === "audio")) {
+						if(!audioTransceiver)
+							audioTransceiver = t;
+						continue;
+					}
+					if((t.sender && t.sender.track && t.sender.track.kind === "video") ||
+							(t.receiver && t.receiver.track && t.receiver.track.kind === "video")) {
+						if(!videoTransceiver)
+							videoTransceiver = t;
+						continue;
+					}
+				}
+			}
+			// Handle audio (and related changes, if any)
+			var audioSend = isAudioSendEnabled(media);
+			var audioRecv = isAudioRecvEnabled(media);
+			if(!audioSend && !audioRecv) {
+				// Audio disabled: have we removed it?
+				if(media.removeAudio && audioTransceiver) {
+					audioTransceiver.direction = "inactive";
+					rtz.log("Setting audio transceiver to inactive:", audioTransceiver);
+				}
+			} else {
+				// Take care of audio m-line
+				if(audioSend && audioRecv) {
+					if(audioTransceiver) {
+						audioTransceiver.direction = "sendrecv";
+						rtz.log("Setting audio transceiver to sendrecv:", audioTransceiver);
+					}
+				} else if(audioSend && !audioRecv) {
+					if(audioTransceiver) {
+						audioTransceiver.direction = "sendonly";
+						rtz.log("Setting audio transceiver to sendonly:", audioTransceiver);
+					}
+				} else if(!audioSend && audioRecv) {
+					if(audioTransceiver) {
+						audioTransceiver.direction = "recvonly";
+						rtz.log("Setting audio transceiver to recvonly:", audioTransceiver);
+					} else {
+						// In theory, this is the only case where we might not have a transceiver yet
+						audioTransceiver = config.pc.addTransceiver("audio", { direction: "recvonly" });
+						rtz.log("Adding recvonly audio transceiver:", audioTransceiver);
+					}
+				}
+			}
+			// Handle video (and related changes, if any)
+			var videoSend = isVideoSendEnabled(media);
+			var videoRecv = isVideoRecvEnabled(media);
+			if(!videoSend && !videoRecv) {
+				// Video disabled: have we removed it?
+				if(media.removeVideo && videoTransceiver) {
+					videoTransceiver.direction = "inactive";
+					rtz.log("Setting video transceiver to inactive:", videoTransceiver);
+				}
+			} else {
+				// Take care of video m-line
+				if(videoSend && videoRecv) {
+					if(videoTransceiver) {
+						videoTransceiver.direction = "sendrecv";
+						rtz.log("Setting video transceiver to sendrecv:", videoTransceiver);
+					}
+				} else if(videoSend && !videoRecv) {
+					if(videoTransceiver) {
+						videoTransceiver.direction = "sendonly";
+						rtz.log("Setting video transceiver to sendonly:", videoTransceiver);
+					}
+				} else if(!videoSend && videoRecv) {
+					if(videoTransceiver) {
+						videoTransceiver.direction = "recvonly";
+						rtz.log("Setting video transceiver to recvonly:", videoTransceiver);
+					} else {
+						// In theory, this is the only case where we might not have a transceiver yet
+						videoTransceiver = config.pc.addTransceiver("video", { direction: "recvonly" });
+						rtz.log("Adding recvonly video transceiver:", videoTransceiver);
+					}
+				}
+			}
+		} else {
+			mediaConstraints["offerToReceiveAudio"] = isAudioRecvEnabled(media);
+			mediaConstraints["offerToReceiveVideo"] = isVideoRecvEnabled(media);
+		}
+		var iceRestart = callbacks.iceRestart === true ? true : false;
+		if(iceRestart) {
+			mediaConstraints["iceRestart"] = true;
+		}
+		rtz.debug(mediaConstraints);
+		// Check if this is Firefox and we've been asked to do simulcasting
+		config.pc.createOffer(mediaConstraints)
+			.then(function(offer) {
+				rtz.debug(offer);
+				rtz.log("Setting local description");
+				config.mySdp = offer.sdp;
+				config.pc.setLocalDescription(offer)
+					.catch(callbacks.error);
+				config.mediaConstraints = mediaConstraints;
+				if(!config.iceDone && !config.trickle) {
+					// Don't do anything until we have all candidates
+					rtz.log("Waiting for all candidates...");
+					return;
+				}
+				rtz.log("Offer ready");
+				rtz.debug(callbacks);
+				// JSON.stringify doesn't work on some WebRTC objects anymore
+				// See https://code.google.com/p/chromium/issues/detail?id=467366
+				var jsep = {
+					"type": offer.type,
+					"sdp": offer.sdp
+				};
+				callbacks.success(jsep);
+			}, callbacks.error);
 	}
 
 	function createAnswer(handleId, media, callbacks) {
 		callbacks = callbacks || {};
 		callbacks.success = (typeof callbacks.success == "function") ? callbacks.success : rtz.noop;
 		callbacks.error = (typeof callbacks.error == "function") ? callbacks.error : rtz.noop;
-		var streamHandle = streamHandles[handleId];
-		if(streamHandle === null || streamHandle === undefined ||
-				streamHandle.webrtcStuff === null || streamHandle.webrtcStuff === undefined) {
+		var pluginHandle = pluginHandles[handleId];
+		if(pluginHandle === null || pluginHandle === undefined ||
+				pluginHandle.webrtcStuff === null || pluginHandle.webrtcStuff === undefined) {
 			rtz.warn("Invalid handle");
 			callbacks.error("Invalid handle");
 			return;
 		}
-		var config = streamHandle.webrtcStuff;
+		var config = pluginHandle.webrtcStuff;
         rtz.log("Creating answer (iceDone=" + config.iceDone + ")");
 		var mediaConstraints = {
             mandatory: {
@@ -708,14 +894,14 @@ function RtzSession(gatewayCallbacks) {
 
 	// WebRTC stuff
 	function streamsDone(handleId, jsep, media, callbacks, stream) {
-		var streamHandle = streamHandles[handleId];
-		if(streamHandle === null || streamHandle === undefined ||
-				streamHandle.webrtcStuff === null || streamHandle.webrtcStuff === undefined) {
+		var pluginHandle = pluginHandles[handleId];
+		if(pluginHandle === null || pluginHandle === undefined ||
+				pluginHandle.webrtcStuff === null || pluginHandle.webrtcStuff === undefined) {
 			rtz.warn("Invalid handle");
 			callbacks.error("Invalid handle");
 			return;
 		}
-		var config = streamHandle.webrtcStuff;
+		var config = pluginHandle.webrtcStuff;
 		rtz.debug("streamsDone:", stream);
 		if(stream) {
 			rtz.debug("  -- Audio tracks:", stream.getAudioTracks());
@@ -748,7 +934,7 @@ function RtzSession(gatewayCallbacks) {
 			rtz.log("Preparing local SDP and gathering candidates (trickle=" + config.trickle + ")");
 			config.pc.oniceconnectionstatechange = function(e) {
 				if(config.pc)
-					streamHandle.iceState(config.pc.iceConnectionState);
+					pluginHandle.iceState(config.pc.iceConnectionState);
 			};
 			config.pc.onicecandidate = function(event) {
 				if (event.candidate == null) {
@@ -776,14 +962,14 @@ function RtzSession(gatewayCallbacks) {
 				if(!event.streams)
 					return;
 				config.remoteStream = event.streams[0];
-				streamHandle.onremotestream(config.remoteStream);
+				pluginHandle.onremotestream(config.remoteStream);
 				if(event.track && !event.track.onended) {
-					rtz.log("Adding onended callback to track:", event.track);
+					rtz.debug("Adding onended callback to track:", event.track);
 					event.track.onended = function(ev) {
 						rtz.log("Remote track removed:", ev);
 						if(config.remoteStream) {
 							config.remoteStream.removeTrack(ev.target);
-							streamHandle.onremotestream(config.remoteStream);
+							pluginHandle.onremotestream(config.remoteStream);
 						}
 					}
 				}
@@ -798,7 +984,7 @@ function RtzSession(gatewayCallbacks) {
 		}
 		// Create offer/answer now
 		if(jsep === null || jsep === undefined) {
-			//createOffer(handleId, media, callbacks);
+			createOffer(handleId, media, callbacks);
 		} else {
 			config.pc.setRemoteDescription(jsep)
 				.then(function() {
@@ -832,14 +1018,14 @@ function RtzSession(gatewayCallbacks) {
 		var jsep = callbacks.jsep;
 		callbacks.media = callbacks.media || { audio: true, video: true };
 		var media = callbacks.media;
-		var streamHandle = streamHandles[handleId];
-		if(streamHandle === null || streamHandle === undefined ||
-				streamHandle.webrtcStuff === null || streamHandle.webrtcStuff === undefined) {
+		var pluginHandle = pluginHandles[handleId];
+		if(pluginHandle === null || pluginHandle === undefined ||
+				pluginHandle.webrtcStuff === null || pluginHandle.webrtcStuff === undefined) {
 			rtz.warn("Invalid handle");
 			callbacks.error("Invalid handle");
 			return;
 		}
-		var config = streamHandle.webrtcStuff;
+		var config = pluginHandle.webrtcStuff;
 		config.trickle = isTrickleEnabled(callbacks.trickle);
 		// Are we updating a session?
 		if(config.pc === undefined || config.pc === null) {
@@ -849,18 +1035,34 @@ function RtzSession(gatewayCallbacks) {
 			rtz.log("Updating existing media session");
 			media.update = true;
 		}
-        // No need to do a getUserMedia, create offer/answer right away
-        streamsDone(handleId, jsep, media, callbacks);
+		if(isAudioSendEnabled(media)) {
+			var gumConstraints = {
+				audio: true,
+				video: false
+			};
+			rtz.debug("getUserMedia constraints", gumConstraints);
+			navigator.mediaDevices.getUserMedia(gumConstraints)
+				.then(function(stream) {
+					pluginHandle.consentDialog(false);
+					streamsDone(handleId, jsep, media, callbacks, stream);
+				}).catch(function(error) {
+					pluginHandle.consentDialog(false);
+					callbacks.error({code: error.code, name: error.name, message: error.message});
+				});
+		} else {
+			// No need to do a getUserMedia, create offer/answer right away
+			streamsDone(handleId, jsep, media, callbacks);
+		}
 	}
 
 	function cleanupWebrtc(handleId, hangupRequest) {
 		rtz.log("Cleaning WebRTC stuff");
-		var streamHandle = streamHandles[handleId];
-		if(streamHandle === null || streamHandle === undefined) {
+		var pluginHandle = pluginHandles[handleId];
+		if(pluginHandle === null || pluginHandle === undefined) {
 			// Nothing to clean
 			return;
 		}
-		var config = streamHandle.webrtcStuff;
+		var config = pluginHandle.webrtcStuff;
 		if(config !== null && config !== undefined) {
 			if(hangupRequest === true) {
 				// Send a hangup request (we don't really care about the response)
@@ -924,11 +1126,11 @@ function RtzSession(gatewayCallbacks) {
 			config.dataChannel = null;
 			config.dtmfSender = null;
 		}
-		streamHandle.oncleanup();
+		pluginHandle.oncleanup();
 	}
 
 	function getStats(handleId) {
-		var pluginHandle = streamHandles[handleId];
+		var pluginHandle = pluginHandles[handleId];
 		if(pluginHandle === null || pluginHandle === undefined ||
 				pluginHandle.webrtcStuff === null || pluginHandle.webrtcStuff === undefined) {
 			rtz.warn("Invalid handle");
@@ -947,11 +1149,11 @@ function RtzSession(gatewayCallbacks) {
 				config.stats.timer = setInterval(function() {
 					config.pc.getStats()
 						.then(function(stats) {
-							rtz.debug('------------ new stats ------------');
+							//rtz.debug('------------ new stats ------------');
 							stats.forEach(function (res) {
 								if(!res)
 									return;
-								rtz.debug(res);
+								// rtz.debug(res);
 								var inStats = false;
 								// Check if these are statistics on incoming media
 								if((res.mediaType === "video" || res.id.toLowerCase().indexOf("video") > -1) &&

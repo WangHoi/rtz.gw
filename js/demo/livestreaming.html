@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta content="text/html; charset=utf-8" http-equiv="Content-Type">
+    <meta name="renderer" content="webkit">
+    <title>RTC livestreaming demo...</title>
+    <link rel="stylesheet" type="text/css" href="demo.css" />
+    <link rel="stylesheet" type="text/css" href="spin.css" />
+</head>
+
+<body>
+    <h2>实时视频</h2>
+    <div class="tab">
+        <button id="rtmp://172.16.3.102:443/live?token=efa24a65b2dc819caacdcc65|type=pass|rtmpUrltype=clientFetch|systemType=2|tId=78895830491829248|lHost=172.16.3.103:1935/realTime_01101002D8F06135E_1_0" class="tablinks" onclick="playStream(this.id)">0杨test11</button>
+        <button id="rtmp://172.16.3.102:443/live?token=efa24a65b2dc819caacdcc65|type=pass|rtmpUrltype=clientFetch|systemType=2|tId=78895830491829248|lHost=172.16.3.103:1935/realTime_01101002D8F0612FD_0_0" class="tablinks" onclick="playStream(this.id)">001春</button>
+        <button id="rtmp://47.94.164.7:30002/live?token=efa24a65b2dc819caacdcc65|type=pass|rtmpUrltype=clientFetch|systemType=2|tId=81466862817774592|lHost=172.17.178.4:30001/realTime_10701f0d31a340041_0_0" class="tablinks" onclick="playStream(this.id)">易瞳_调试41</button>
+        <button id="rtmp://172.20.226.86/live/stream" class="tablinks" onclick="playStream(this.id)">cat</button>
+		<button id="rtmp://47.94.164.7:30002/live?token=efa24a65b2dc819caacdcc65|type=pass|rtmpUrltype=clientFetch|systemType=2|tId=79835075481963520|lHost=172.17.178.4:30001/realTime_861584040006612_0_0" class="tablinks" onclick="playStream(this.id)">realTime_861584040006612_0_0</button>
+		<button id="rtmp://47.94.229.33:30004/live/99999901" class="tablinks" onclick="playStream(this.id)">redirect_99999901</button>
+		<button id="rtmp://47.94.229.33:30004/live/99999908" class="tablinks" onclick="playStream(this.id)">redirect_99999908</button>
+    </div>
+    <div class="tabcontent">
+        <div class="video-container">
+            <div>
+			<div id="demoVideo" class="v1"></div>
+                <video id="video" name="videoElement" class="centeredVideo v1" autoplay nocontrols muted>
+					<source src="./assets/example.mp4">
+                </video>
+            </div>
+        </div>
+        <!-- <textarea name="logcatbox" class="logcatBox" rows="10" readonly></textarea> -->
+    </div>
+    <script src="../adapter_no_edge.js"></script>
+    <script src="../rtz.js"></script>
+    <script src="spin.js"></script>
+    <script src="rtz-livestreaming.js"></script>
+    <script>
+		function playStream(url) {
+            // Declare all variables
+            var i, tabcontent, tablinks;
+
+            // Get all elements with class="tablinks" and remove the class "active"
+            tablinks = document.getElementsByClassName("tablinks");
+            for (i = 0; i < tablinks.length; i++) {
+                tablinks[i].className = tablinks[i].className.replace(" active", "");
+            }
+
+            document.getElementById(url).className += " active";
+
+            startStream(url);
+
+        }
+        document.addEventListener('DOMContentLoaded', function () {
+            //document.getElementsByClassName('tablinks')[0].click();
+        });
+    </script>
+    
+</body>
+
+</html>
