@@ -1,7 +1,7 @@
-//var server = 'ws://172.16.3.102:443/rtz';
+var server = 'ws://172.16.3.102:9443/rtz';
 //var server = 'ws://172.20.226.86:443/rtz';
 //var server = 'ws://192.168.2.55:443/rtz';
-var server = 'ws://47.94.164.7:30002/rtz';
+//var server = 'ws://47.94.164.7:30002/rtz';
 var rtzSession = null;
 
 var opaqueId = "livestreaming-" + rtz.randomString(12);
@@ -107,7 +107,7 @@ function startStream(url) {
 							{
 								jsep: jsep,
 								// We want recvonly audio/video and, if negotiated, datachannels
-								media: { audioSend: false, videoSend: false, data: true },
+								media: { audioSend: true, audioRecv: true, videoSend: false, data: true },
 								success: function(jsep) {
 									rtz.debug("Got SDP!");
 									rtz.debug(jsep);

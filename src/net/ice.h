@@ -76,6 +76,8 @@ sbuf_t *ice_get_rpass(ice_agent_t *agent);
 
 uint32_t ice_get_ssrc(ice_agent_t *agent, int video);
 
+void ice_set_ssrc(ice_agent_t *agent, int video, uint32_t ssrc);
+
 void ice_webrtc_hangup(ice_agent_t *handle, const char *reason);
 
 ice_stream_t *ice_get_stream(ice_agent_t *agent);

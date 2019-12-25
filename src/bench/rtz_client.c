@@ -541,14 +541,15 @@ void rtz_media_data_handler(tcp_chan_t *chan, void *udata)
         sbuf_resize(client->media_rcv_buf, len);
         tcp_chan_read(chan, client->media_rcv_buf->data, len);
         enum ice_payload_type type = ice_get_payload_type(client->media_rcv_buf->data, len);
-        if (type == ICE_PAYLOAD_STUN)
+        if (type == ICE_PAYLOAD_STUN) {
             /*LLOG(LL_TRACE, "got stun msg size %d", len)*/;
-        else if (type == ICE_PAYLOAD_DTLS)
+        } else if (type == ICE_PAYLOAD_DTLS) {
             dtls_handler(client, client->media_rcv_buf->data, len);
-        else if (type == ICE_PAYLOAD_RTP)
+        } else if (type == ICE_PAYLOAD_RTP) {
             /*LLOG(LL_TRACE, "got rtp size %d", len)*/;
-        else if (type == ICE_PAYLOAD_RTCP)
+        } else if (type == ICE_PAYLOAD_RTCP) {
             /*LLOG(LL_TRACE, "got rtcp size %d", len)*/;
+        }
         rtz_update_stats(client, 2 + len, 0);
     }
 }
@@ -916,4 +917,8 @@ void rtz_update_stats(void *rtz_handle, int recv_bytes, int send_bytes)
     rtz_client_t *client = rtz_handle;
     client->recv_bytes += recv_bytes;
     client->send_bytes += send_bytes;
+}
+
+void rtz_incoming_audio(void *rtz_handle, const void *data, int size)
+{
 }

@@ -90,7 +90,7 @@ set(rtz_SRCS
 	)
 add_executable(rtz.gw ${rtz_SRCS})
 if(WITH_WSS)
-    add_definitions(-DRTZ_SERVER_SSL=1)
+    add_definitions(-DWITH_WSS=1)
 endif()
 if(WITH_HTTP_HOOKS)
     add_definitions(-DWITH_HTTP_HOOKS=1)
@@ -165,6 +165,7 @@ set(rtz_bench_SRCS
 	src/net/net_util.c
     src/net/nbuf.c
     src/net/tcp_chan.c
+    src/net/tcp_chan_ssl.c
     src/net/http_types.c
     src/net/stun.c
     src/net/rtp.c

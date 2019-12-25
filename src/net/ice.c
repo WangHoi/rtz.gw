@@ -1,4 +1,4 @@
-﻿#include "ice.h"
+#include "ice.h"
 #include "sbuf.h"
 #include "event_loop.h"
 #include "tcp_chan.h"
@@ -12,6 +12,7 @@
 #include "rtp.h"
 #include "rtz_server.h"
 #include "rtz_shard.h"
+#include "pack_util.h"
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <netdb.h>
@@ -255,6 +256,7 @@ void ice_tcp_accept_handler(tcp_srv_t *tcp_srv, tcp_chan_t *chan, void *udata)
     //get_socket_send_buf_size(tcp_chan_fd(chan), &size);
     //LLOG(LL_WARN, "new send buf size=%d", size);
     set_tcp_notsent_lowat(tcp_chan_fd(chan), 8192);
+    set_tcp_quickack(tcp_chan_fd(chan), 1);
 }
 
 void ice_server_start(ice_server_t *srv)
@@ -388,8 +390,13 @@ uint32_t ice_get_ssrc(ice_agent_t *agent, int video)
 {
     return video ? agent->stream->video_ssrc : agent->stream->audio_ssrc;
 }
-
-
+void ice_set_ssrc(ice_agent_t *agent, int video, uint32_t ssrc)
+{
+    if (video)
+        agent->stream->video_ssrc = ssrc;
+    else
+        agent->stream->audio_ssrc = ssrc;
+}
 uint32_t get_priority(enum ice_candidate_type type, int local_preference, int component)
 {
     int type_preference;
@@ -565,6 +572,42 @@ void srtp_handler(ice_agent_t *agent, const void *data, int size)
     //LLOG(LL_TRACE, "srtp pkt len=%d", size);
     if (size < 12)
         return;
+    ice_stream_t *stream = agent->stream;
+    ice_component_t *component = stream->component;
+    if (!component->dtls || !component->dtls->srtp_valid || !component->dtls->srtp_in) {
+        LLOG(LL_WARN, "Missing valid SRTP session (packet arrived too early?), skipping...");
+        return;
+    }
+    int buflen = size;
+    char *buf = (void *)data;
+    srtp_err_status_t res = srtp_unprotect(component->dtls->srtp_in, buf, &buflen);
+    if (res != srtp_err_status_ok) {
+        LLOG(LL_ERROR, "SRTP unprotect error: %s (len=%d-->%d)", rtz_srtp_error_str(res), size, buflen);
+        return;
+    }
+    /* Is this audio or video? */
+    int video = 0, vindex = 0;
+    /* Bundled streams, should we check the SSRCs? */
+    if (!ice_flags_is_set(agent, ICE_HANDLE_WEBRTC_HAS_AUDIO)) {
+        /* No audio has been negotiated, definitely video */
+        //LLOG(LL_TRACE, "Incoming RTCP, bundling: this is video (no audio has been negotiated)");
+        video = 1;
+    } else if (!ice_flags_is_set(agent, ICE_HANDLE_WEBRTC_HAS_VIDEO)) {
+        /* No video has been negotiated, definitely audio */
+        //LLOG(LL_TRACE, "Incoming RTCP, bundling: this is audio (no video has been negotiated)");
+        video = 0;
+    } else {
+        if (buflen >= 12) {
+            int payload = buf[1] & 0x7f;
+            if (payload >= 96 && payload < 100)
+                video = 1;
+            else
+                video = 0;
+            //LLOG(LL_WARN, "TODO: analyse rtp payload=%d ssrc=%u audio_ssrc=%u video_ssrc=%u",
+            //    payload, ssrc, audio_ssrc, video_ssrc);
+        }
+    }
+    rtp_handler(agent, video, buf, buflen);
 }
 
 void srtcp_handler(ice_agent_t *agent, const void *data, int size)
@@ -659,9 +702,11 @@ void ice_webrtc_hangup(ice_agent_t *handle, const char *reason)
 
 void rtp_handler(ice_agent_t *agent, int video, const void *data, int size)
 {
-    //LLOG(LL_TRACE, "rtp pkt len=%d", size);
+    //LLOG(LL_TRACE, "rtp pkt video=%d len=%d", video, size);
     if (size < 12)
         return;
+    if (!video)
+        rtz_incoming_audio(agent->rtz_handle, data, size);
 }
 
 void rtcp_handler(ice_agent_t *agent, int video, const void *data, int size)

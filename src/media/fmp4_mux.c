@@ -7,7 +7,7 @@
 #include <string.h>
 #include <assert.h>
 
-#define MAX_SAMPLE_SIZE 50
+#define MAX_SAMPLE_SIZE 100
 
 typedef struct fmp4_sample_info_t {
     int64_t pts;
@@ -412,7 +412,11 @@ void fmp4_mux_media_sample(fmp4_mux_t * ctx,
     int key_frame, const char *data, int size)
 {
     int track_idx = video ? 0 : 1;
-    assert(ctx->sample_count[track_idx] < MAX_SAMPLE_SIZE);
+    LLOG(LL_DEBUG, "#%d pts=%lld key=%d size=%d", track_idx, (long long)pts, key_frame, size);
+    //assert(ctx->sample_count[track_idx] < MAX_SAMPLE_SIZE);
+    if (ctx->sample_count[track_idx] >= MAX_SAMPLE_SIZE) {
+        return;
+    }
     int sample_idx = ctx->sample_count[track_idx]++;
     fmp4_sample_info_t *sample = &ctx->samples[track_idx][sample_idx];
     sbuf_t *data_buf = ctx->data_buf[track_idx];

@@ -1,4 +1,4 @@
-﻿#include "log.h"
+#include "log.h"
 #include "event_loop.h"
 #include "mpsc_queue.h"
 #include "rtz_client.h"
@@ -26,6 +26,9 @@
 
 int RTZ_BENCH_CLIENTS = 1;
 const char *RTZ_BENCH_URL = NULL;
+const char *CERT_PEM = NULL;
+const char *CERT_KEY = NULL;
+const char *CERT_PWD = NULL;
 rtz_client_t *test_clients[1024] = {};
 int starting_index = 0;
 
@@ -78,7 +81,7 @@ int main(int argc, char *argv[])
     SSL_load_error_strings();
     OpenSSL_add_all_algorithms();
     dtls_srtp_init(NULL, NULL, NULL);
-#if RTZ_SERVER_SSL
+#if WITH_WSS
     tcp_ssl_init(CERT_PEM, CERT_KEY, CERT_PWD);
 #endif
 
@@ -110,7 +113,7 @@ int main(int argc, char *argv[])
 
     zl_loop_del(main_loop);
 
-#if RTZ_SERVER_SSL
+#if WITH_WSS
     tcp_ssl_cleanup();
 #endif
     dtls_srtp_cleanup();

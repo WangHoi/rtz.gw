@@ -1,4 +1,4 @@
-var server = 'ws://172.16.3.102:443/rtz';
+var server = 'ws://172.16.3.102:9443/rtz';
 //var server = 'ws://172.20.226.86:443/rtz';
 //var server = 'ws://192.168.2.55:443/rtz';
 //var server = 'ws://47.94.164.7:30002/rtz';
@@ -37,6 +37,7 @@ $(document).ready(function() {
 							{
 								type: "talkback",
 								opaqueId: opaqueId,
+								url: "rtmp://47.94.229.33:30004/live/testaudio",
 								success: function(pluginHandle) {
 									$('#details').remove();
 									rtzHandle = pluginHandle;
@@ -55,7 +56,6 @@ $(document).ready(function() {
 									rtz.debug("Consent dialog should be " + (on ? "on" : "off") + " now");
 									if(on) {
 										// Darken screen and show hint
-										/*
 										$.blockUI({ 
 											message: '<div><img src="up_arrow.png"/></div>',
 											css: {
@@ -66,77 +66,50 @@ $(document).ready(function() {
 												top: '10px',
 												left: (navigator.mozGetUserMedia ? '-100px' : '300px')
 											} });
-										*/
 									} else {
 										// Restore screen
-										/*
 										$.unblockUI();
-										*/
 									}
 								},
 								onmessage: function(msg, jsep) {
 									rtz.debug(" ::: Got a message :::");
 									rtz.debug(msg);
-									var event = msg["result"];
-									rtz.debug("Result: " + event);
-									if(event != undefined && event != null) {
-										if(event === "joined") {
-											// Successfully joined, negotiate WebRTC now
-											myid = msg["id"];
-											rtz.log("Successfully joined room " + msg["room"] + " with ID " + myid);
-											if(!webrtcUp) {
-												webrtcUp = true;
-												// Publish our stream
-												rtzHandle.createOffer(
-													{
-														media: { video: false},	// This is an audio only room
-														success: function(jsep) {
-															rtz.debug("Got SDP!");
-															rtz.debug(jsep);
-															var publish = { "request": "configure", "muted": false };
-															rtzHandle.send({"message": publish, "jsep": jsep});
-														},
-														error: function(error) {
-															rtz.error("WebRTC error:", error);
-															bootbox.alert("WebRTC error... " + JSON.stringify(error));
-														}
-													});
-											}
-											// Any room participant?
-											if(msg["participants"] !== undefined && msg["participants"] !== null) {
-												var list = msg["participants"];
-												rtz.debug("Got a list of participants:");
-												rtz.debug(list);
-												for(var f in list) {
-													var id = list[f]["id"];
-													var display = list[f]["display"];
-													var setup = list[f]["setup"];
-													var muted = list[f]["muted"];
-													rtz.debug("  >> [" + id + "] " + display + " (setup=" + setup + ", muted=" + muted + ")");
-													if($('#rp'+id).length === 0) {
-														// Add to the participants list
-														$('#list').append('<li id="rp'+id+'" class="list-group-item">'+display+
-															' <i class="absetup fa fa-chain-broken"></i>' +
-															' <i class="abmuted fa fa-microphone-slash"></i></li>');
-														$('#rp'+id + ' > i').hide();
-													}
-													if(muted === true || muted === "true")
-														$('#rp'+id + ' > i.abmuted').removeClass('hide').show();
-													else
-														$('#rp'+id + ' > i.abmuted').hide();
-													if(setup === true || setup === "true")
-														$('#rp'+id + ' > i.absetup').hide();
-													else
-														$('#rp'+id + ' > i.absetup').removeClass('hide').show();
+									var result = msg["result"];
+									rtz.debug("Result: " + result);
+									if(result !== null && result !== undefined) {
+										if(result["status"] !== undefined && result["status"] !== null) {
+											var status = result["status"];
+											if(status === 'preparing') {
+												rtz.log("Starting, please wait...");
+												if(!webrtcUp) {
+													webrtcUp = true;
+													// Publish our stream
+													rtzHandle.createOffer(
+														{
+															media: { video: false, audio: true, audioRecv: true },
+															success: function(jsep) {
+																rtz.debug("Got SDP!");
+																rtz.debug(jsep);
+																var publish = { "request": "talkback", "muted": false };
+																rtzHandle.send({"message": publish, "jsep": jsep});
+															},
+															error: function(error) {
+																rtz.error("WebRTC error:", error);
+																bootbox.alert("WebRTC error... " + JSON.stringify(error));
+															}
+														});
 												}
+											} else if(status === 'started') {
+
+											} else if(status === 'stopped') {
+
+											} else if(status === 'progress') {
+
 											}
-										} else if(event === "destroyed") {
-											// The room has been destroyed
-											rtz.warn("The room has been destroyed!");
-											bootbox.alert("The room has been destroyed", function() {
-												window.location.reload();
-											});
 										}
+									} else if(msg["error"] !== undefined && msg["error"] !== null) {
+										rtz.error(msg["error"]);
+										return;
 									}
 									if(jsep !== undefined && jsep !== null) {
 										rtz.debug("Handling SDP as well...");

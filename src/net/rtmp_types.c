@@ -1,4 +1,4 @@
-#include "rtmp_types.h"
+﻿#include "rtmp_types.h"
 #include "sbuf.h"
 #include "log.h"
 #include "pack_util.h"
@@ -551,6 +551,18 @@ int rtmp_write_header0(void* data, unsigned char chunk_channel, uint32_t timesta
         p += pack_be32(p, timestamp);
         return 16;
     }
+}
+
+int rtmp_write_header1(void *data, unsigned char chunk_channel, uint32_t dt,
+    uint32_t body_size, rtmp_message_type_t msg_type)
+{
+    uint8_t *p = data;
+    assert(chunk_channel < 64);
+    *p++ = (chunk_channel & 0x3f);
+    p += pack_be24(p, dt);
+    p += pack_be24(p, body_size);
+    *p++ = msg_type;
+    return 8;
 }
 
 int rtmp_write_header3(void* data, unsigned char chunk_channel)

@@ -14,7 +14,8 @@ rtz.init = function(options) {
 		rtz.error = console.error.bind(console);
 		rtz.warn = console.warn.bind(console);
 		rtz.info = console.info.bind(console);
-		rtz.debug = rtz.noop; //console.debug.bind(console);
+		rtz.debug = console.debug.bind(console);
+		//rtz.debug = rtz.noop;
 		rtz.trace = console.trace.bind(console);
 
 		// Helper methods to attach/reattach a stream to a video element (previously part of adapter.js)
@@ -472,10 +473,12 @@ function RtzSession(gatewayCallbacks) {
 		var url = callbacks.url;
 		var transport = callbacks.transport || "udp";
 		var min_delay = callbacks.min_delay || 8;
+		var handle_type = callbacks.type || "streaming";
 		var redirect = callbacks.redirect || 0;
 		var transaction = rtz.randomString(12);
 		var request = {
 			"type": "createHandle",
+			"handle_type": handle_type,
 			"opaque_id": opaqueId,
 			"transaction": transaction,
 			"url": url,
@@ -534,7 +537,7 @@ function RtzSession(gatewayCallbacks) {
                 send : function(callbacks) { sendMessage(handleId, callbacks); },
                 //data : function(callbacks) { sendData(handleId, callbacks); },
                 //dtmf : function(callbacks) { sendDtmf(handleId, callbacks); },
-                //consentDialog : callbacks.consentDialog,
+                consentDialog : callbacks.consentDialog,
                 iceState : callbacks.iceState,
                 mediaState : callbacks.mediaState,
                 webrtcState : callbacks.webrtcState,
@@ -752,7 +755,7 @@ function RtzSession(gatewayCallbacks) {
 			}
 			// Handle audio (and related changes, if any)
 			var audioSend = isAudioSendEnabled(media);
-			var audioRecv = isAudioRecvEnabled(media);
+			var audioRecv = false;//isAudioRecvEnabled(media);
 			if(!audioSend && !audioRecv) {
 				// Audio disabled: have we removed it?
 				if(media.removeAudio && audioTransceiver) {
@@ -909,6 +912,88 @@ function RtzSession(gatewayCallbacks) {
 		}
 		// We're now capturing the new stream: check if we're updating or if it's a new thing
 		var addTracks = false;
+		if(!config.myStream || !media.update || config.streamExternal) {
+			config.myStream = stream;
+			addTracks = true;
+		} else {
+			// We only need to update the existing stream
+			if(((!media.update && isAudioSendEnabled(media)) || (media.update && (media.addAudio || media.replaceAudio))) &&
+					stream.getAudioTracks() && stream.getAudioTracks().length) {
+				config.myStream.addTrack(stream.getAudioTracks()[0]);
+				if(media.replaceAudio && rtz.webRTCAdapter.browserDetails.browser === "firefox") {
+					rtz.log("Replacing audio track:", stream.getAudioTracks()[0]);
+					for(var index in config.pc.getSenders()) {
+						var s = config.pc.getSenders()[index];
+						if(s && s.track && s.track.kind === "audio") {
+							s.replaceTrack(stream.getAudioTracks()[0]);
+						}
+					}
+				} else {
+					if(rtz.webRTCAdapter.browserDetails.browser === "firefox" && rtz.webRTCAdapter.browserDetails.version >= 59) {
+						// Firefox >= 59 uses Transceivers
+						rtz.log((media.replaceVideo ? "Replacing" : "Adding") + " video track:", stream.getVideoTracks()[0]);
+						var audioTransceiver = null;
+						var transceivers = config.pc.getTransceivers();
+						if(transceivers && transceivers.length > 0) {
+							for(var i in transceivers) {
+								var t = transceivers[i];
+								if((t.sender && t.sender.track && t.sender.track.kind === "audio") ||
+										(t.receiver && t.receiver.track && t.receiver.track.kind === "audio")) {
+									audioTransceiver = t;
+									break;
+								}
+							}
+						}
+						if(audioTransceiver && audioTransceiver.sender) {
+							audioTransceiver.sender.replaceTrack(stream.getVideoTracks()[0]);
+						} else {
+							config.pc.addTrack(stream.getVideoTracks()[0], stream);
+						}
+					} else {
+						rtz.log((media.replaceAudio ? "Replacing" : "Adding") + " audio track:", stream.getAudioTracks()[0]);
+						config.pc.addTrack(stream.getAudioTracks()[0], stream);
+					}
+				}
+			}
+			if(((!media.update && isVideoSendEnabled(media)) || (media.update && (media.addVideo || media.replaceVideo))) &&
+					stream.getVideoTracks() && stream.getVideoTracks().length) {
+				config.myStream.addTrack(stream.getVideoTracks()[0]);
+				if(media.replaceVideo && rtz.webRTCAdapter.browserDetails.browser === "firefox") {
+					rtz.log("Replacing video track:", stream.getVideoTracks()[0]);
+					for(var index in config.pc.getSenders()) {
+						var s = config.pc.getSenders()[index];
+						if(s && s.track && s.track.kind === "video") {
+							s.replaceTrack(stream.getVideoTracks()[0]);
+						}
+					}
+				} else {
+					if(rtz.webRTCAdapter.browserDetails.browser === "firefox" && rtz.webRTCAdapter.browserDetails.version >= 59) {
+						// Firefox >= 59 uses Transceivers
+						rtz.log((media.replaceVideo ? "Replacing" : "Adding") + " video track:", stream.getVideoTracks()[0]);
+						var videoTransceiver = null;
+						var transceivers = config.pc.getTransceivers();
+						if(transceivers && transceivers.length > 0) {
+							for(var i in transceivers) {
+								var t = transceivers[i];
+								if((t.sender && t.sender.track && t.sender.track.kind === "video") ||
+										(t.receiver && t.receiver.track && t.receiver.track.kind === "video")) {
+									videoTransceiver = t;
+									break;
+								}
+							}
+						}
+						if(videoTransceiver && videoTransceiver.sender) {
+							videoTransceiver.sender.replaceTrack(stream.getVideoTracks()[0]);
+						} else {
+							config.pc.addTrack(stream.getVideoTracks()[0], stream);
+						}
+					} else {
+						rtz.log((media.replaceVideo ? "Replacing" : "Adding") + " video track:", stream.getVideoTracks()[0]);
+						config.pc.addTrack(stream.getVideoTracks()[0], stream);
+					}
+				}
+			}
+		}
 		// If we still need to create a PeerConnection, let's do that
 		if(!config.pc) {
 			var pc_config = {};
@@ -982,7 +1067,9 @@ function RtzSession(gatewayCallbacks) {
 				config.pc.addTrack(track, stream);
 			});
 		}
-		// Create offer/answer now
+		// If there's a new local stream, let's notify the application
+		if(config.myStream)
+			pluginHandle.onlocalstream(config.myStream);		// Create offer/answer now
 		if(jsep === null || jsep === undefined) {
 			createOffer(handleId, media, callbacks);
 		} else {
@@ -1037,8 +1124,14 @@ function RtzSession(gatewayCallbacks) {
 		}
 		if(isAudioSendEnabled(media)) {
 			var gumConstraints = {
-				audio: true,
-				video: false
+				video: false,
+				audio: {
+					googEchoCancellation: true,
+					googAutoGainControl: true,
+					googNoiseSuppression: true,
+					googHighpassFilter: true,
+					sampleRate: 8000
+				}
 			};
 			rtz.debug("getUserMedia constraints", gumConstraints);
 			navigator.mediaDevices.getUserMedia(gumConstraints)
@@ -1053,6 +1146,10 @@ function RtzSession(gatewayCallbacks) {
 			// No need to do a getUserMedia, create offer/answer right away
 			streamsDone(handleId, jsep, media, callbacks);
 		}
+	}
+
+	function webrtcError(error) {
+		rtz.error("WebRTC error:", error);
 	}
 
 	function cleanupWebrtc(handleId, hangupRequest) {

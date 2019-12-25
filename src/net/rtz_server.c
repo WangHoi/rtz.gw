@@ -61,6 +61,7 @@ enum {
     RTZ_HANDLE_RTC_UP = 4,
     RTZ_HANDLE_STARTED = 8,
     /** Time before release rtz_stream_t */
+    RTZ_CREATE_SESSION_TIMEOUT_MSECS = 5000,
     RTZ_NO_VIDEO_TIMEOUT_MSECS = 15000,
     RTZ_CRON_TIMEOUT_MSECS = 1000,
     RTZ_TIME_REPORT_MSECS = 3600000,
@@ -69,7 +70,7 @@ enum {
 typedef struct http_peer_t http_peer_t;
 
 /* Handle (Secure)WebSocket protocol */
-#if RTZ_SERVER_SSL
+#if WITH_WSS
 #define TCP_SRV_T tcp_srv_ssl_t
 #define TCP_SRV_BIND tcp_srv_ssl_bind
 #define TCP_SRV_LISTEN tcp_srv_ssl_listen
@@ -112,9 +113,12 @@ struct rtz_server_t {
     struct list_head stream_list;   /* rtz_stream_t list */
 };
 
+typedef struct rtz_session_t rtz_session_t;
 struct http_peer_t {
     rtz_server_t *srv;
     TCP_CHAN_T *chan;
+    rtz_session_t *session;
+    long long create_time;
 
     enum http_parse_state parse_state;
     sbuf_t *parse_buf;
@@ -139,6 +143,9 @@ typedef struct rtz_session_t {
 
 typedef struct rtz_handle_t {
     zl_loop_t *loop;
+    int talkback;
+    int rtmp_publish_ready;
+    rtmp_client_t *rtmp_publish_client;
     sbuf_t *id;
     sbuf_t *url;
     int url_redirect;               /* use 'url' directly */
@@ -182,9 +189,10 @@ static void send_ws_frame(http_peer_t *peer, int text, const void *data, int siz
 
 static void create_session(http_peer_t *peer, const char *transaction);
 static void destroy_session(http_peer_t *peer, const char *transaction, const char *session_id);
-static void create_handle(http_peer_t *peer, const char *transaction, const char *session_id,
-                          const char *url, int url_redirect,
-    const char *transport, uint16_t min_playout_delay);
+static void create_streaming_handle(http_peer_t *peer, const char *transaction, const char *session_id,
+    const char *url, int url_redirect, const char *transport, uint16_t min_playout_delay);
+static void create_talkback_handle(http_peer_t *peer, const char *transaction, const char *session_id,
+    const char *url);
 static void destroy_handle(http_peer_t *peer, const char *transaction,
                            const char *session_id, const char *handle_id);
 static void handle_message(http_peer_t *peer, const char *transaction,
@@ -195,12 +203,14 @@ static rtz_handle_t *find_handle(rtz_server_t *srv, const char *session_id,
                                  const char *handle_id);
 static rtz_handle_t *find_handle2(rtz_server_t *srv, long client_id);
 static rtz_stream_t *find_stream(rtz_server_t *srv, const char *stream_name);
+static void process_sdp_offer(http_peer_t *peer, const char *transaction,
+    const char *session_id, const char *handle_id, const char *sdp);
 static void process_sdp_answer(http_peer_t *peer, const char *transaction,
-                               const char *session_id, const char *handle_id,
-                               const char *sdp);
+    const char *session_id, const char *handle_id, const char *sdp);
 static void send_rtp(rtz_handle_t *handle, int video, const void *data, int size);
 static void rtp_mux_handler(int video, int kf, void *data, int size, void *udata);
-static sbuf_t *create_sdp(rtz_handle_t *handle, int tcp);
+static sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp);
+static sbuf_t *create_answer_sdp(rtz_handle_t *handle, const char *offer_sdp, int tcp);
 static void rtz_handle_del(rtz_handle_t *handle);
 static void rtz_session_del(rtz_session_t *session);
 static void parse_url(rtz_handle_t *h, const char *url);
@@ -215,6 +225,7 @@ static void rtmp_video_handler(int64_t timestamp, uint16_t sframe_time,
     int key_frame, const void *data, int size, void *udata);
 static void rtmp_video_codec_handler(const void *data, int size, void *udata);
 static void rtmp_metadata_handler(int vcodec, int acodec, double videotime, void *udata);
+static void rtmp_publish_handler(zl_loop_t *loop, int64_t status, void *udata);
 
 rtz_server_t *rtz_server_new(zl_loop_t *loop)
 {
@@ -293,6 +304,7 @@ http_peer_t *http_peer_new(rtz_server_t *srv, TCP_CHAN_T *chan)
     if (peer == NULL)
         return NULL;
     memset(peer, 0, sizeof(http_peer_t));
+    peer->create_time = zl_time();
     peer->srv = srv;
     peer->chan = chan;
     peer->parse_state = HTTP_PARSE_HEADER;
@@ -307,11 +319,13 @@ void http_peer_del(http_peer_t *peer)
 {
     if (peer->parse_request)
         http_request_del(peer->parse_request);
-    rtz_session_t *s, *tmp;
-    list_for_each_entry_safe(s, tmp, &peer->srv->session_list, link) {
-        if (s->peer == peer) {
-            LLOG(LL_ERROR, "release session %p sid='%s'", s, s->id->data);
-            rtz_session_del(s);
+    if (peer->session) {
+        rtz_session_t *s, *tmp;
+        list_for_each_entry_safe(s, tmp, &peer->srv->session_list, link) {
+            if (s->peer == peer) {
+                LLOG(LL_ERROR, "release session %p sid='%s'", s, s->id->data);
+                rtz_session_del(s);
+            }
         }
     }
     TCP_CHAN_CLOSE(peer->chan, 0);
@@ -372,17 +386,23 @@ void peer_ws_frame_handler(http_peer_t *peer, struct ws_frame *frame)
             } else if (!strcmp(type, "destroySession")) {
                 destroy_session(peer, transaction, session_id);
             } else if (!strcmp(type, "createHandle")) {
-                const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(json, "url"));
-                const char *transport = cJSON_GetStringValue(cJSON_GetObjectItem(json, "transport"));
-                cJSON *redirect_json = cJSON_GetObjectItem(json, "redirect");
-                cJSON *min_playout_delay_json = cJSON_GetObjectItem(json, "min_delay");
-                uint16_t min_playout_delay = 0;
-                int redirect = redirect_json ? redirect_json->valueint : 0;
-                if (cJSON_IsNumber(min_playout_delay_json))
-                    min_playout_delay = (uint16_t)min_playout_delay_json->valueint;
-                if (min_playout_delay > MAX_PLAYOUT_DELAY_FRAMES)
-                    min_playout_delay = MAX_PLAYOUT_DELAY_FRAMES;
-                create_handle(peer, transaction, session_id, url, redirect, transport, min_playout_delay);
+                const char *handle_type = cJSON_GetStringValue(cJSON_GetObjectItem(json, "handle_type"));
+                if (!handle_type || !strcmp(handle_type, "streaming")) {
+                    const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(json, "url"));
+                    const char *transport = cJSON_GetStringValue(cJSON_GetObjectItem(json, "transport"));
+                    cJSON *redirect_json = cJSON_GetObjectItem(json, "redirect");
+                    cJSON *min_playout_delay_json = cJSON_GetObjectItem(json, "min_delay");
+                    uint16_t min_playout_delay = 0;
+                    int redirect = redirect_json ? redirect_json->valueint : 0;
+                    if (cJSON_IsNumber(min_playout_delay_json))
+                        min_playout_delay = (uint16_t)min_playout_delay_json->valueint;
+                    if (min_playout_delay > MAX_PLAYOUT_DELAY_FRAMES)
+                        min_playout_delay = MAX_PLAYOUT_DELAY_FRAMES;
+                    create_streaming_handle(peer, transaction, session_id, url, redirect, transport, min_playout_delay);
+                } else {
+                    const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(json, "url"));
+                    create_talkback_handle(peer, transaction, session_id, url);
+                }
             } else if (!strcmp(type, "destroyHandle")) {
                 destroy_handle(peer, transaction, session_id, handle_id);
             } else if (!strcmp(type, "message")) {
@@ -593,7 +613,7 @@ void send_upgrade_reply(http_peer_t *peer, const char *client_key)
     compute_sha1(sec_key->data, sec_key->size, sha1);
     char sec_result[40];
     int n = base64_encode(sha1, 20, NULL, 0);
-    assert(n < sizeof(sec_result));
+    assert(n < (int)sizeof(sec_result));
     base64_encode(sha1, 20, sec_result, n);
     sec_result[n] = 0;
 
@@ -655,6 +675,7 @@ void create_session(http_peer_t *peer, const char *transaction)
     memset(session, 0, sizeof(rtz_session_t));
     session->srv = peer->srv;
     session->peer = peer;
+    peer->session = session;
     session->id = sbuf_random_string(12);
     INIT_LIST_HEAD(&session->handle_list);
     list_add(&session->link, &peer->srv->session_list);
@@ -728,7 +749,7 @@ void parse_url(rtz_handle_t *h, const char *url)
          url, h->app->data, h->tc_url->data, h->stream_name->data);
 }
 
-void create_handle(http_peer_t *peer, const char *transaction, const char *session_id,
+void create_streaming_handle(http_peer_t *peer, const char *transaction, const char *session_id,
                    const char *url, int url_redirect, const char *transport, uint16_t min_playout_delay)
 {
     rtz_session_t *session = find_session(peer->srv, session_id);
@@ -781,7 +802,7 @@ void create_handle(http_peer_t *peer, const char *transaction, const char *sessi
         list_add(&handle->stream_link, &handle->stream->handle_list);
     } else {
         handle->stream = rtz_stream_new(peer->srv, handle->stream_name->data);
-        rtmp_client_t *client = rtmp_client_new(peer->srv->loop);
+        rtmp_client_t *client = rtmp_client_new(peer->srv->loop, 0);
 
         sbuf_t *origin_url = sbuf_new1(1024);
         if (handle->url_redirect) {
@@ -803,10 +824,10 @@ void create_handle(http_peer_t *peer, const char *transaction, const char *sessi
         sbuf_del(origin_url);
     }
 
-    sbuf_t *offer_sdp = create_sdp(handle, tcp);
+    sbuf_t *offer_sdp = create_offer_sdp(handle, tcp);
     handle->flag = RTZ_HANDLE_PREPARING;
 
-    LLOG(LL_TRACE, "create_handle %p sid='%s' hid='%s'",
+    LLOG(LL_TRACE, "create_streaming_handle %p sid='%s' hid='%s'",
          handle, session_id, handle->id->data);
 
     {
@@ -859,6 +880,74 @@ void destroy_handle(http_peer_t *peer, const char *transaction,
     }
 }
 
+void create_talkback_handle(http_peer_t *peer, const char *transaction,
+    const char *session_id, const char *url)
+{
+    rtz_session_t *session = find_session(peer->srv, session_id);
+    if (!session) {
+        //send_json_error(peer, -1, "Session not found");
+        LLOG(LL_ERROR, "sid='%s' not found", session_id);
+        return;
+    }
+    if (!url) {
+        //send_json_error(peer, -1, "Session not found");
+        LLOG(LL_ERROR, "sid='%s' url '%s' not valid", session_id, url ? : "<null>");
+        return;
+    }
+
+    rtz_handle_t *handle = malloc(sizeof(rtz_handle_t));
+    memset(handle, 0, sizeof(rtz_handle_t));
+    handle->loop = peer->srv->loop;
+    handle->session = session;
+    handle->id = sbuf_random_string(12);
+    handle->url = sbuf_new();
+    handle->app = sbuf_new();
+    handle->tc_url = sbuf_new();
+    handle->stream_name = sbuf_new();
+    parse_url(handle, url);
+    handle->stream = NULL;
+    handle->ice = ice_agent_new(peer->srv->ice_srv, handle);
+    list_add(&handle->link, &session->handle_list);
+    handle->last_report_time = zl_time();
+    handle->talkback = 1;
+
+    /* hook */
+    handle->hook_client_id = -1;
+
+    LLOG(LL_TRACE, "rtz_handle_new talkback %p(client_id=%ld,luser=%s)",
+        handle, handle->hook_client_id, ice_get_luser(handle->ice));
+
+    rtmp_client_t *client = rtmp_client_new(peer->srv->loop, 1);
+    LLOG(LL_DEBUG, "handle %p push to stream %s url='%s'",
+        handle, handle->stream_name->data, handle->url->data);
+    rtmp_client_set_uri(client, handle->url->data);
+    rtmp_client_set_userdata(client, handle);
+    rtmp_client_set_publish_cb(client, rtmp_publish_handler);
+    rtmp_client_tcp_connect(client, NULL);
+    handle->rtmp_publish_client = client;
+    handle->flag = RTZ_HANDLE_PREPARING;
+
+    LLOG(LL_TRACE, "create_talkback_handle %p sid='%s' hid='%s'",
+        handle, session_id, handle->id->data);
+
+    {
+        cJSON *json = cJSON_CreateObject();
+        cJSON_AddStringToObject(json, "transaction", transaction);
+        cJSON_AddStringToObject(json, "session_id", session_id);
+        cJSON_AddStringToObject(json, "id", handle->id->data);
+        cJSON_AddStringToObject(json, "type", "success");
+        send_json(peer, json);
+        cJSON_Delete(json);
+    }
+
+    cJSON *json = make_streaming_event(handle, "preparing", NULL);
+    sbuf_t *txid = sbuf_random_string(12);
+    cJSON_AddStringToObject(json, "transaction", txid->data);
+    send_json(peer, json);
+    sbuf_del(txid);
+    cJSON_Delete(json);
+}
+
 void handle_message(http_peer_t *peer, const char *transaction,
                     const char *session_id, const char *handle_id,
                     cJSON *body, cJSON *jsep)
@@ -869,14 +958,18 @@ void handle_message(http_peer_t *peer, const char *transaction,
         const char *sdp = cJSON_GetStringValue(cJSON_GetObjectItem(jsep, "sdp"));
         assert(!strcmp(type, "answer"));
         process_sdp_answer(peer, transaction, session_id, handle_id, sdp);
+    } else if (!strcmp(request, "talkback")) {
+        const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(jsep, "type"));
+        const char *sdp = cJSON_GetStringValue(cJSON_GetObjectItem(jsep, "sdp"));
+        assert(!strcmp(type, "offer"));
+        process_sdp_offer(peer, transaction, session_id, handle_id, sdp);
     } else {
         LLOG(LL_WARN, "unhandled type='message' request='%s' body='%s' jsep='%s'",
              request, cJSON_PrintUnformatted(body), jsep ? cJSON_PrintUnformatted(jsep) : "");
         //stop_stream(peer, transaction, session_id, handle_id);
     }
 }
-
-sbuf_t *create_sdp(rtz_handle_t *handle, int tcp)
+sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp)
 {
     ice_agent_t *agent = handle->ice;
     const char *user = ice_get_luser(agent);
@@ -901,7 +994,7 @@ sbuf_t *create_sdp(rtz_handle_t *handle, int tcp)
         sdp,
         "m=audio 9 UDP/TLS/RTP/SAVPF 8\r\n"
         "c=IN IP4 %s\r\n"
-        "a=sendonly\r\n"
+        "a=sendrecv\r\n"
         "a=mid:audio\r\n"
         "a=rtcp-mux\r\n"
         "a=ice-ufrag:%s\r\n"
@@ -976,6 +1069,63 @@ sbuf_t *create_sdp(rtz_handle_t *handle, int tcp)
 
     return sdp;
 }
+sbuf_t *create_answer_sdp(rtz_handle_t *handle, const char *offer_sdp, int tcp)
+{
+    ice_agent_t *agent = handle->ice;
+    const char *user = ice_get_luser(agent);
+    const char *pwd = ice_get_lpass(agent);
+    const char *fingerprint = dtls_get_local_fingerprint();
+    uint32_t audio_ssrc = ice_get_ssrc(agent, 0);
+    uint32_t video_ssrc = ice_get_ssrc(agent, 1);
+
+    sbuf_t *sdp = sbuf_newf(
+        "v=0\r\n"
+        "o=- 1550110455648463 %d IN IP4 %s\r\n"
+        "s=%s\r\n"
+        "t=0 0\r\n"
+        "a=group:BUNDLE 0\r\n"
+        "a=msid-semantic: WMS rtz\r\n"
+        "a=ice-lite\r\n",
+        ++handle->sdp_version,
+        RTZ_PUBLIC_IP, handle->stream_name->data);
+
+    ice_flags_set(agent, ICE_HANDLE_WEBRTC_HAS_AUDIO);
+    sbuf_appendf(
+        sdp,
+        "m=audio 9 UDP/TLS/RTP/SAVPF 8\r\n"
+        "c=IN IP4 %s\r\n"
+        "a=sendrecv\r\n"
+        "a=mid:0\r\n"
+        "a=rtcp-mux\r\n"
+        "a=ice-ufrag:%s\r\n"
+        "a=ice-pwd:%s\r\n"
+        "a=ice-options:trickle\r\n"
+        "a=fingerprint:sha-256 %s\r\n"
+        "a=setup:passive\r\n"
+        "a=rtpmap:8 PCMA/8000\r\n"
+        //"a=maxptime:40\r\n"
+        "a=fmtp:8 \r\n"
+        "a=ssrc:%"SCNu32" cname:rtz\r\n"
+        "a=ssrc:%"SCNu32" msid:rtz rtza0\r\n"
+        "a=ssrc:%"SCNu32" mslabel:rtz\r\n"
+        "a=ssrc:%"SCNu32" label:rtza0\r\n",
+        RTZ_PUBLIC_IP, user, pwd, fingerprint,
+        audio_ssrc, audio_ssrc, audio_ssrc, audio_ssrc);
+    if (tcp) {
+        sbuf_appendf(
+            sdp,
+            "a=candidate:1 1 tcp 2013266431 %s %d typ host tcptype passive\r\n"
+            "a=end-of-candidates\r\n",
+            RTZ_PUBLIC_IP, RTZ_PUBLIC_MEDIA_PORT);
+    } else {
+        sbuf_appendf(
+            sdp,
+            "a=candidate:1 1 udp 2013266431 %s %d typ host\r\n"
+            "a=end-of-candidates\r\n",
+            RTZ_PUBLIC_IP, RTZ_PUBLIC_MEDIA_PORT);
+    }
+    return sdp;
+}
 
 rtz_session_t *find_session(rtz_server_t *srv, const char *session_id)
 {
@@ -1025,10 +1175,71 @@ rtz_stream_t *find_stream(rtz_server_t *srv, const char *stream_name)
     }
     return NULL;
 }
+void process_sdp_offer(http_peer_t *peer, const char *transaction,
+    const char *session_id, const char *handle_id, const char *sdp)
+{
+    /*
+    LLOG(LL_TRACE, "process_sdp_answer txid='%s' sid='%s' hid='%s' sdp='%s'",
+         transaction, session_id, handle_id, sdp);
+    */
+    rtz_handle_t *handle = find_handle(peer->srv, session_id, handle_id);
+    LLOG(LL_TRACE, "process_sdp_offer handle %p sid='%s' hid='%s'",
+        handle, session_id, handle_id);
+    if (!handle) {
+        //send_json_error(peer, -1, "Session not found");
+        LLOG(LL_ERROR, "sid='%s' hid='%s' not found", session_id, handle_id);
+        return;
+    }
+    ice_stream_t *ice_stream = ice_get_stream(handle->ice);
+    const char *p;
+    int ret;
+    p = strstr(sdp, "a=fingerprint:");
+    if (p) {
+        char *rhash, *rfingerprint;
+        assert(p);
+        ret = sscanf(p, "a=fingerprint: %ms %ms", &rhash, &rfingerprint);
+        assert(ret == 2);
+        sbuf_strcpy(ice_stream_get_remote_hashing(ice_stream), rhash);
+        sbuf_strcpy(ice_stream_get_remote_fingerprint(ice_stream), rfingerprint);
+        free(rhash);
+        free(rfingerprint);
+        //LLOG(LL_TRACE, "rpass=%s rhash=%s rfingerprint=%s", rpass, rhash, rfingerprint);
+    }
 
+    p = strstr(sdp, "a=ice-pwd:");
+    if (p) {
+        char *rpass;
+        assert(p);
+        ret = sscanf(p, "a=ice-pwd: %ms", &rpass);
+        assert(ret == 1);
+        sbuf_strcpy(ice_get_rpass(handle->ice), rpass);
+        free(rpass);
+    }
+    /*
+    p = strstr(sdp, "a=ssrc:");
+    if (p) {
+        uint32_t ssrc;
+        ret = sscanf(p, "a=ssrc: %"SCNu32, &ssrc);
+        if (ret == 1)
+            ice_set_ssrc(handle->ice, 0, ssrc);
+    }
+    */
+
+    sbuf_t *answer_sdp = create_answer_sdp(handle, sdp, 1);
+    handle->flag = RTZ_HANDLE_STARTING;
+    cJSON *json = make_streaming_event(handle, "starting", NULL);
+    sbuf_t *txid = sbuf_random_string(12);
+    cJSON_AddStringToObject(json, "transaction", txid->data);
+    cJSON *jsep = cJSON_AddObjectToObject(json, "jsep");
+    cJSON_AddStringToObject(jsep, "type", "answer");
+    cJSON_AddStringToObject(jsep, "sdp", answer_sdp->data);
+    send_json(handle->session->peer, json);
+    cJSON_Delete(json);
+    sbuf_del(txid);
+    sbuf_del(answer_sdp);
+}
 void process_sdp_answer(http_peer_t *peer, const char *transaction,
-                        const char *session_id, const char *handle_id,
-                        const char *sdp)
+    const char *session_id, const char *handle_id, const char *sdp)
 {
     /*
     LLOG(LL_TRACE, "process_sdp_answer txid='%s' sid='%s' hid='%s' sdp='%s'",
@@ -1089,7 +1300,6 @@ rtz_stream_t *rtz_stream_new(rtz_server_t *srv, const char *stream_name)
     stream->srv = srv;
     stream->stream_name = sbuf_strdup(stream_name);
     stream->rtp_mux = rtp_mux_new();
-    stream->dtracer = drift_tracer_new();
     rtp_mux_set_cb(stream->rtp_mux, rtp_mux_handler, stream);
     list_add_tail(&stream->link, &srv->stream_list);
     INIT_LIST_HEAD(&stream->handle_list);
@@ -1144,7 +1354,6 @@ void rtz_stream_del(rtz_stream_t *stream)
     list_del(&stream->link);
     sbuf_del(stream->stream_name);
     rtp_mux_del(stream->rtp_mux);
-    drift_tracer_del(stream->dtracer);
     free(stream);
 }
 
@@ -1176,43 +1385,8 @@ void rtz_stream_push_video(rtz_stream_t *stream, int64_t rtp_ts, uint16_t sframe
 
     long long now = zl_time();
     stream->sframe_time = sframe_time;
-
-    /*
-    const char *test_url_prefix = "realTime_01101002D8F0612FD_0_0";
-    if (!strncmp(stream->stream_name->data, test_url_prefix, strlen(test_url_prefix))) {
-        LLOG(LL_DEBUG, "rtmp_ts=%"PRId64", size=%d, type=%hhx", rtp_ts / 90, size, ((uint8_t*)data)[0] & 0x1f);
-        rtp_ts = stream->counter++ * 3597;
-    }
-    */
-#if 0
-    if (stream->first_in_time > 0) {
-        int64_t drift = (now - stream->first_in_time) - (rtp_ts - stream->first_rtp_ts) / 90;
-        //if (!strcmp(stream->stream_name->data, "realTime_HP100191A0050098_0_0")) {
-        //    LLOG(LL_DEBUG, "video ts=%"PRId64", now=%lld, drift=%"PRId64", size=%d",
-        //        (rtp_ts - stream->first_rtp_ts) / 90, now - stream->first_in_time,
-        //        drift, size);
-        //}
-
-        bool changed = drift_tracer_update(stream->dtracer, drift);
-        if (changed) {
-            stream->accum_over_drift += drift_tracer_get_over_drift(stream->dtracer);
-            LLOG(LL_INFO, "%s: update accum over_drift to %lld ms",
-                stream->stream_name->data, (long long)stream->accum_over_drift);
-            // reset
-            stream->first_in_time = 0;
-            stream->first_rtp_ts = 0;
-        }
-    }
-    if (stream->first_in_time == 0) {
-        stream->first_in_time = now;
-        stream->first_rtp_ts = rtp_ts;
-    }
-#endif
     stream->last_rtp_ts = rtp_ts;
     stream->last_in_time = now;
-#if 0
-    rtp_ts += (stream->accum_over_drift + drift_tracer_get_drift(stream->dtracer)) * 90;
-#endif
     if (!list_empty(&stream->handle_list)) {
         stream->last_out_time = now;
         rtp_mux_input(stream->rtp_mux, 1, rtp_ts, data, size);
@@ -1223,7 +1397,6 @@ void rtz_stream_push_audio(rtz_stream_t *stream, int64_t rtp_ts, const void *dat
 {
     if (!stream)
         return;
-    rtp_ts += stream->accum_over_drift * 90;
     if (!list_empty(&stream->handle_list)) {
         rtp_mux_input(stream->rtp_mux, 0, rtp_ts, data, size);
     }
@@ -1257,12 +1430,18 @@ void rtz_webrtcup(void *rtz_handle)
         return;
 
     handle->flag = RTZ_HANDLE_RTC_UP;
-
     {
         cJSON *json = cJSON_CreateObject();
         cJSON_AddStringToObject(json, "type", "webrtcup");
         cJSON_AddStringToObject(json, "sender", handle->id->data);
         send_json(session->peer, json);
+        cJSON_Delete(json);
+    }
+
+    if (handle->rtmp_publish_ready) {
+        handle->flag = RTZ_HANDLE_STARTED;
+        cJSON *json = make_streaming_event(handle, "started", NULL);
+        send_json(handle->session->peer, json);
         cJSON_Delete(json);
     }
 }
@@ -1290,6 +1469,28 @@ void rtz_update_stats(void *rtz_handle, int recv_bytes, int send_bytes)
     if (handle) {
         handle->recv_bytes += recv_bytes;
         handle->send_bytes += send_bytes;
+    }
+}
+
+void rtz_incoming_audio(void *rtz_handle, const void *data, int size)
+{
+    rtz_handle_t *handle = rtz_handle;
+    if (handle && handle->talkback) {
+        if (handle->rtmp_publish_ready) {
+            int plen = 0;
+            char *payload = NULL;
+            payload = rtp_payload((char*)data, size, &plen);
+            if (payload) {
+                const struct rtp_header *hdr = data;
+                uint32_t timestamp = unpack_be32(&hdr->timestamp);
+                //LLOG(LL_TRACE, "audio timestamp=%"SCNu32" len=%d", timestamp, plen);
+                rtmp_client_send_audio_pcma(handle->rtmp_publish_client,
+                    timestamp / 8, payload, plen);
+            }
+            uint32_t audio_ssrc = ice_get_ssrc(handle->ice, 0);
+            pack_be32((char *)data + 8, audio_ssrc);
+            send_rtp(handle, 0, data, size);
+        }
     }
 }
 
@@ -1404,6 +1605,12 @@ void rtz_handle_del(rtz_handle_t *handle)
         list_del(&handle->stream_link);
         handle->stream = NULL;
     }
+    if (handle->rtmp_publish_client) {
+        rtmp_client_abort(handle->rtmp_publish_client);
+        rtmp_client_del(handle->rtmp_publish_client);
+        handle->rtmp_publish_client = NULL;
+        handle->rtmp_publish_ready = 0;
+    }
     /* hangup the PeerConnection, if any */
     if (handle->ice) {
         ice_flags_set(handle->ice, ICE_HANDLE_WEBRTC_STOP);
@@ -1496,7 +1703,19 @@ void rtz_server_cron(zl_loop_t *loop, int timerid, void *udata)
     rtz_stream_t *stream, *tmp;
     rtz_session_t *session, *stmp;
     rtz_handle_t *h, *htmp;
+    http_peer_t *peer, *ptmp;
     long long now = zl_time();
+    list_for_each_entry_safe(peer, ptmp, &srv->peer_list, link) {
+        if (peer->session)
+            continue;
+
+        long long expire_timeout = RTZ_CREATE_SESSION_TIMEOUT_MSECS;
+        if (now > peer->create_time + expire_timeout) {
+            LLOG(LL_ERROR, "http_peer_t %p create_session timeout %lld ms",
+                peer, now - peer->create_time);
+            http_peer_del(peer);
+        }
+    }
     list_for_each_entry_safe(stream, tmp, &srv->stream_list, link) {
         long long expire_timeout = RTZ_NO_VIDEO_TIMEOUT_MSECS + lrand48() % 1000;
         if (now > stream->last_out_time + expire_timeout) {
@@ -1518,11 +1737,13 @@ void rtz_server_cron(zl_loop_t *loop, int timerid, void *udata)
                 h->recv_bytes = 0;
             }
 
-            auto err_time = ice_get_err_time(h->ice);
+            long long err_time = ice_get_err_time(h->ice);
             if (err_time && err_time + RTZ_NO_VIDEO_TIMEOUT_MSECS < now) {
                 LLOG(LL_ERROR, "rtz_handle_t %p timeout %lld ms", h, now - err_time);
-                h->stream = NULL;
-                list_del(&h->stream_link);
+                if (h->stream) {
+                    h->stream = NULL;
+                    list_del(&h->stream_link);
+                }
                 if (h->ice) {
                     {
                         cJSON *json = cJSON_CreateObject();
@@ -1554,30 +1775,25 @@ void rtz_handle_on_play_hook_handler(zl_loop_t *loop, long client_id, int result
     }
     
 }
-
 void rtmp_audio_handler(int64_t timestamp, uint16_t sframe_time,
     int key_frame, const void *data, int size, void *udata)
 {
     rtz_stream_push_audio(udata, timestamp * 8, data, size);
 }
-
 void rtmp_video_handler(int64_t timestamp, uint16_t sframe_time,
     int key_frame, const void *data, int size, void *udata)
 {
     rtz_stream_push_video(udata, timestamp * 90, sframe_time,
         key_frame, data, size);
 }
-
 void rtmp_video_codec_handler(const void *data, int size, void *udata)
 {
     rtz_stream_set_video_codec_h264(udata, data, size);
 }
-
 void rtmp_metadata_handler(int vcodec, int acodec, double videotime, void *udata)
 {
     rtz_stream_update_videotime(udata, videotime);
 }
-
 void make_origin_url(sbuf_t *origin_url, const char *tc_url, const char *stream_name)
 {
     sbuf_clear(origin_url);
@@ -1591,4 +1807,19 @@ void make_origin_url(sbuf_t *origin_url, const char *tc_url, const char *stream_
     else
         sbuf_appendc(origin_url, '/');
     sbuf_append1(origin_url, stream_name);
+}
+void rtmp_publish_handler(zl_loop_t *loop, int64_t status, void *udata)
+{
+    rtz_handle_t *h = udata;
+    if (status == RTMP_NETSTREAM_PUBLISH_START) {
+        h->rtmp_publish_ready = 1;
+        if (h->flag == RTZ_HANDLE_RTC_UP) {
+            h->flag = RTZ_HANDLE_STARTED;
+            cJSON *json = make_streaming_event(h, "started", NULL);
+            send_json(h->session->peer, json);
+            cJSON_Delete(json);
+        }
+    } else {
+        ice_webrtc_hangup(h->ice, "Publish error");
+    }
 }

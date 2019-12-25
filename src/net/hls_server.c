@@ -1,4 +1,4 @@
-#include "hls_server.h"
+﻿#include "hls_server.h"
 #include "event_loop.h"
 #include "tcp_chan.h"
 #include "list.h"
@@ -400,7 +400,7 @@ void http_request_handler(http_peer_t *peer, http_request_t *req)
             stream = hls_stream_new(peer->srv);
             parse_m3u8_path(stream, req->path);
 
-            rtmp_client_t *client = rtmp_client_new(peer->srv->loop);
+            rtmp_client_t *client = rtmp_client_new(peer->srv->loop, 0);
             sbuf_t *origin_url = sbuf_new1(1024);
             make_origin_url(origin_url, stream->tc_url->data, stream->stream_name->data);
             //sbuf_strcpy(origin_url, "rtmp://172.16.3.103:1935/live?token=efa24a65b2dc819caacdcc65|type=pass|rtmpUrltype=clientFetch|systemType=2|live=0|tId=78932095595549696|lHost172.16.3.103:1935/cloudRecord_01101002D8F06135E_0_0_0_06931d1e685d4f84a327f25bdfecfe94");

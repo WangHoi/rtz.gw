@@ -69,6 +69,7 @@ struct rtmp_client_t {
     rtmp_packet_cb video_cb;
     rtmp_video_codec_cb video_codec_cb;
     rtmp_metadata_cb metadata_cb;
+    zl_defer_cb publish_cb;
 
     rtmp_handshake_state_t hstate;
     rtmp_parse_state_t pstate;
@@ -102,6 +103,8 @@ struct rtmp_client_t {
 
     long long last_time;
     int ping_timer;
+    int talkback;
+    int talkback_metadata_sent;
 };
 
 typedef struct rtmp_request_t {
@@ -143,6 +146,7 @@ static void send_release_stream(rtmp_client_t *client, zl_defer_cb ucb);
 static void send_fcpublish(rtmp_client_t *client, zl_defer_cb ucb);
 static void send_publish(rtmp_client_t *client, zl_defer_cb ucb);
 static void send_play(rtmp_client_t *client, zl_defer_cb ucb);
+static void send_metadata_audio_pcma(rtmp_client_t *client, zl_defer_cb ucb);
 static void send_pause(rtmp_client_t *client, bool pause, zl_defer_cb ucb);
 static void send_ping(rtmp_client_t *client);
 //static void send_video(rtmp_client_t *client, uint32_t timestamp, const void *data, int size);
@@ -155,7 +159,7 @@ static void rtmp_client_event_handler(tcp_chan_t *chan, int status, void *udata)
 static void rtmp_write_handler(const void *data, int size, void *udata);
 static void ping_timeout_handler(zl_loop_t *loop, int id, void *udata);
 
-rtmp_client_t *rtmp_client_new(zl_loop_t *loop)
+rtmp_client_t *rtmp_client_new(zl_loop_t *loop, int talkback)
 {
     rtmp_client_t *client = malloc(sizeof(rtmp_client_t));
     memset(client, 0, sizeof(rtmp_client_t));
@@ -174,6 +178,7 @@ rtmp_client_t *rtmp_client_new(zl_loop_t *loop)
     client->vcodec = video_codec_new();
     client->acodec = audio_codec_new();
     client->ping_timer = -1;
+    client->talkback = talkback;
     //client->vcodec_changed = 1;
 
     INIT_LIST_HEAD(&client->request_list);
@@ -399,6 +404,10 @@ void rtmp_client_set_metadata_cb(rtmp_client_t *client, rtmp_metadata_cb func)
 {
     client->metadata_cb = func;
 }
+void rtmp_client_set_publish_cb(rtmp_client_t *client, zl_defer_cb func)
+{
+    client->publish_cb = func;
+}
 void rtmp_client_enter_blocking(rtmp_client_t *client)
 {
     tcp_chan_detach(client->chan);
@@ -620,7 +629,8 @@ void chunk_handler(rtmp_client_t *client)
         int64_t timestamp = tsc_timestamp(client->audio_tsc, hdr->timestamp);
         audio_handler(client, timestamp, data, size);
     } else if (hdr->type_id == RTMP_MESSAGE_VIDEO) {
-        //LLOG(LL_TRACE, "video size=%d data=%02hhx%02hhx%02hhx%02hhx", (int)size, data[0], data[1], data[2], data[3]);
+        //LLOG(LL_TRACE, "video orig_ts=%u size=%d data=%02hhx%02hhx%02hhx%02hhx",
+        //    (unsigned)hdr->timestamp, (int)size, data[0], data[1], data[2], data[3]);
         int64_t timestamp = tsc_timestamp(client->video_tsc, hdr->timestamp);
 
         /* Update frame_time */
@@ -769,9 +779,9 @@ void finish_requests(rtmp_client_t *client, unsigned tx_id, int64_t status)
             rtmp_request_del(req);
             break;
         }
-
         if (req->tx_id > tx_id)
             break;
+        LLOG(LL_DEBUG, "finish_request %s", req->method);
         list_del_init(&req->link);
         if (req->ucb)
             req->ucb(client->loop, (req->tx_id < tx_id) ? RTMP_SKIP_RESPONSE : status, client->udata);
@@ -803,8 +813,16 @@ void command_handler(rtmp_client_t *client, unsigned channel, const char *cmd,
 
 void add_request(rtmp_client_t *client, rtmp_request_t *req)
 {
+    LLOG(LL_DEBUG, "add_request %s", req->method);
     req->timestamp = zl_timestamp();
     list_add_tail(&req->link, &client->request_list);
+    /*
+    char buf[RTMP_MAX_CHUNK_HEADER_SIZE];
+    int m;
+    m = rtmp_write_header1(buf, req->channel, 0, req->buf->size, RTMP_MESSAGE_AMF0_CMD);
+    rtmp_write_handler(buf, m, client->chan);
+    rtmp_write_handler(req->buf->data, req->buf->size, client->chan);
+    */
     rtmp_write_chunk(req->channel, 0, RTMP_MESSAGE_AMF0_CMD, 0,
                      req->buf->data, req->buf->size, rtmp_write_handler, client->chan);
 }
@@ -855,14 +873,14 @@ void send_connect(rtmp_client_t *client, zl_defer_cb ucb)
     sbuf_del(tc_url);
     //p += amf0_write_field_name(p, pend - p, "fPad");
     //p += amf0_write_boolean(p, pend - p, 0);
-    p += amf0_write_field_name(p, pend - p, "capabilities");
-    p += amf0_write_number(p, pend - p, 239);
-    p += amf0_write_field_name(p, pend - p, "audioCodecs");
-    p += amf0_write_number(p, pend - p, 3575);
-    p += amf0_write_field_name(p, pend - p, "videoCodecs");
-    p += amf0_write_number(p, pend - p, 252);
-    p += amf0_write_field_name(p, pend - p, "videoFunction");
-    p += amf0_write_number (p, pend - p, 1);
+    //p += amf0_write_field_name(p, pend - p, "capabilities");
+    //p += amf0_write_number(p, pend - p, 239);
+    //p += amf0_write_field_name(p, pend - p, "audioCodecs");
+    //p += amf0_write_number(p, pend - p, 3575);
+    //p += amf0_write_field_name(p, pend - p, "videoCodecs");
+    //p += amf0_write_number(p, pend - p, 252);
+    //p += amf0_write_field_name(p, pend - p, "videoFunction");
+    //p += amf0_write_number (p, pend - p, 1);
     //p += amf0_write_field_name(p, pend - p, "pageUrl");
     //p += amf0_write_string(p, pend - p, "http://127.0.0.1/");
     p += amf0_write_field_name(p, pend - p, "objectEncoding");
@@ -871,7 +889,6 @@ void send_connect(rtmp_client_t *client, zl_defer_cb ucb)
     req->buf->size = p - req->buf->data;
     add_request(client, req);
 }
-
 /**
  * createStream(txID, null);
  */
@@ -888,7 +905,6 @@ void send_create_stream(rtmp_client_t *client, zl_defer_cb ucb)
     req->buf->size = p - req->buf->data;
     add_request(client, req);
 }
-
 void send_play(rtmp_client_t *client, zl_defer_cb ucb)
 {
     rtmp_request_t *req = rtmp_request_new(client, "play", RTMP_SOURCE_CHANNEL, ucb);
@@ -903,7 +919,6 @@ void send_play(rtmp_client_t *client, zl_defer_cb ucb)
     req->buf->size = p - req->buf->data;
     add_request(client, req);
 }
-
 void send_pause(rtmp_client_t *client, bool pause, zl_defer_cb ucb)
 {
     rtmp_request_t *req = rtmp_request_new(client,
@@ -920,7 +935,39 @@ void send_pause(rtmp_client_t *client, bool pause, zl_defer_cb ucb)
     req->buf->size = p - req->buf->data;
     add_request(client, req);
 }
+void send_metadata_audio_pcma(rtmp_client_t *client, zl_defer_cb ucb)
+{
+    if (!client->chan)
+        return;
 
+    const int BUF_SIZE = 2048;
+    sbuf_t *buf = sbuf_new1(BUF_SIZE);
+
+    char *p = buf->data;
+    const char *pend = buf->data + BUF_SIZE;
+    p += amf0_write_string(p, pend - p, "@setDataFrame");
+    p += amf0_write_string(p, pend - p, "onMetaData");
+    {
+        p += amf0_write_object_start(p, pend - p);
+        p += amf0_write_field_name(p, pend - p, "duration");
+        p += amf0_write_number(p, pend - p, 0);
+        p += amf0_write_field_name(p, pend - p, "audiocodecid");
+        p += amf0_write_number(p, pend - p, 7);
+        p += amf0_write_field_name(p, pend - p, "audiosamplerate");
+        p += amf0_write_number(p, pend - p, 8000);
+        p += amf0_write_field_name(p, pend - p, "audiosamplesize");
+        p += amf0_write_number(p, pend - p, 8);
+        p += amf0_write_field_name(p, pend - p, "stereo");
+        p += amf0_write_boolean(p, pend - p, 0);
+        p += amf0_write_object_end(p, pend - p);
+    }
+    buf->size = p - buf->data;
+    *p++ = 0;
+
+    rtmp_write_chunk(RTMP_NOTIFY_CHANNEL, 0, RTMP_MESSAGE_AMF0_NOTIFY,
+        0, buf->data, buf->size, rtmp_write_handler, client->chan);
+    sbuf_del(buf);
+}
 /**
  * releaseStream(txID, null, streamName);
  */
@@ -981,8 +1028,26 @@ void send_ping(rtmp_client_t *client)
     uint32_t now = (uint32_t)(zl_time() / 1000);
     rtmp_write_ping(&now, sizeof(uint32_t), rtmp_write_handler, client->chan);
 }
+void rtmp_client_send_audio_pcma(rtmp_client_t *client, uint32_t orig_timestamp,
+    const char *data, int size)
+{
+    if (!client->chan)
+        return;
+    if (!client->talkback_metadata_sent) {
+        client->talkback_metadata_sent = 1;
+        send_metadata_audio_pcma(client, NULL);
+    }
 
+    sbuf_t *buf = sbuf_new1(size + 16);
+    sbuf_appendc(buf, 0x70);    // PCMA
+    sbuf_append2(buf, data, size);
 
+    int64_t timestamp = tsc_timestamp(client->audio_tsc, orig_timestamp);
+
+    rtmp_write_chunk(RTMP_SOURCE_CHANNEL, (uint32_t)timestamp, RTMP_MESSAGE_AUDIO,
+        0, buf->data, buf->size, rtmp_write_handler, client->chan);
+    sbuf_del(buf);
+}
 #if 0
 void send_video(rtmp_client_t *client, uint32_t timestamp, const void *data, int size)
 {
@@ -1119,6 +1184,8 @@ rtmp_status_t convert_to_status(const char *data, size_t size)
         --p;
         amf0_read_number(p, data + size - p, &n);
         status = lroundl(n);
+    } else if (type == AMF0_TYPE_UNDEFINED) {
+        status = 0;
     }
     sbuf_del(field_name);
     sbuf_del(code);
@@ -1198,8 +1265,15 @@ void handshake_handler(rtmp_client_t *client)
         tcp_chan_read(client->chan, data, RTMP_HANDSHAKE_S2_SIZE);
         client->hstate = RTMP_HS_DONE;
         send_connect(client, NULL);
-        send_create_stream(client, NULL);
-        send_play(client, NULL);
+        if (client->talkback) {
+            send_release_stream(client, NULL);
+            send_fcpublish(client, NULL);
+            send_create_stream(client, NULL);
+            send_publish(client, client->publish_cb);
+        } else {
+            send_create_stream(client, NULL);
+            send_play(client, NULL);
+        }
         if (client->ping_timer == -1) {
             client->ping_timer = zl_timer_start(client->loop, RTMP_PING_TIMEOUT_MSECS,
                 RTMP_PING_TIMEOUT_MSECS, ping_timeout_handler, client);
@@ -1240,6 +1314,8 @@ void audio_handler(rtmp_client_t *peer, int64_t timestamp, const char *data, int
         //uint32_t rtp_ts = (uint32_t)(timestamp * 8);
         //LLOG(LL_TRACE, "audio ts=%ld size=%d", timestamp, size - 1);
         //rtz_stream_push_audio(peer->rtz_stream, rtp_ts, data + 1, size - 1);
+
+        // sframe_time == (size - 1) / 8
         peer->audio_cb(timestamp, (size - 1) / 8, 1, data + 1, size - 1, peer->udata);
     }
 }
@@ -1435,7 +1511,8 @@ void metadata_handler(rtmp_client_t *peer, const char *data, int size)
 void rtmp_write_handler(const void *data, int size, void *udata)
 {
     tcp_chan_t *chan = udata;
-    tcp_chan_write(chan, data, size);
+    if (chan)
+        tcp_chan_write(chan, data, size);
 }
 
 void ping_timeout_handler(zl_loop_t *loop, int id, void *udata)

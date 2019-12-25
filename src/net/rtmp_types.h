@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <assert.h>
 #include <stdlib.h>
 #include <memory.h>
@@ -138,6 +138,8 @@ void rtmp_write_pong(const void *ev_data, int ev_size,
                      rtmp_write_cb write_cb, void *udata);
 int rtmp_write_header0(void* data, unsigned char chunk_channel, uint32_t timestamp,
                        uint32_t body_size, rtmp_message_type_t msg_type, uint32_t msg_stream_id);
+int rtmp_write_header1(void *data, unsigned char chunk_channel, uint32_t dt,
+    uint32_t body_size, rtmp_message_type_t msg_type);
 int rtmp_write_header3(void* data, unsigned char chunk_channel);
 void rtmp_write_chunk(unsigned channel, uint32_t timestamp,
                       rtmp_message_type_t type, uint32_t msg_stream_id,

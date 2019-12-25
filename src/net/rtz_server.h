@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "http_types.h"
 #include "drift_tracer.h"
 #include <stdint.h>
@@ -19,7 +19,6 @@ struct rtz_stream_t {
     rtz_server_t *srv;
     /** link to rtz_server_t.stream_list */
     struct list_head link;
-
     /** Such as 'realTime_xxx_0_0' */
     sbuf_t *stream_name;
 
@@ -43,10 +42,6 @@ struct rtz_stream_t {
     rtp_mux_t *rtp_mux;
     /** Smoothed frame time, estimate FPS */
     uint16_t sframe_time;
-
-    /** Compensate bad camera */
-    drift_tracer_t *dtracer;
-    int64_t accum_over_drift;
 };
 
 rtz_server_t *rtz_server_new(zl_loop_t *loop);
@@ -69,6 +64,7 @@ void rtz_stream_update_videotime(rtz_stream_t *stream, double videotime);
 void rtz_webrtcup(void *rtz_handle);
 void rtz_hangup(void *rtz_handle);
 void rtz_update_stats(void *rtz_handle, int recv_bytes, int sent_bytes);
+void rtz_incoming_audio(void *rtz_handle, const void *data, int size);
 
 int rtz_get_load(rtz_server_t *srv);
 

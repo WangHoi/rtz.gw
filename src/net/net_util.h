@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 
 int set_tcp_nodelay(int fd, int nodelay);
+int set_tcp_quickack(int fd, int qack);
 int set_tcp_notsent_lowat(int fd, int bytes);
 int get_tcp_notsent_lowat(int fd);
 int set_socket_max_pacing_rate(int fd, int rate);

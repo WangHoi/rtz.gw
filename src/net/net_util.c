@@ -1,4 +1,4 @@
-#include "net_util.h"
+﻿#include "net_util.h"
 
 static int fcntl_set(int fd, int flag)
 {
@@ -21,6 +21,10 @@ static int fcntl_unset(int fd, int flag)
 int set_tcp_nodelay(int fd, int nodelay)
 {
 	return setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(int));
+}
+int set_tcp_quickack(int fd, int qack)
+{
+    return setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &qack, sizeof(int));
 }
 
 int set_tcp_notsent_lowat(int fd, int bytes)

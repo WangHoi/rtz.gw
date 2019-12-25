@@ -1,4 +1,4 @@
-﻿#include "log.h"
+#include "log.h"
 #include "event_loop.h"
 #include "mpsc_queue.h"
 //#include "rtsp_client.h"
@@ -164,7 +164,7 @@ int main(int argc, char *argv[])
     SSL_load_error_strings();
     OpenSSL_add_all_algorithms();
     dtls_srtp_init(CERT_PEM, CERT_KEY, CERT_PWD);
-#if RTZ_SERVER_SSL
+#if WITH_WSS
     tcp_ssl_init(CERT_PEM, CERT_KEY, CERT_PWD);
 #endif
 
@@ -204,7 +204,7 @@ int main(int argc, char *argv[])
 
     zl_loop_del(main_loop);
 
-#if RTZ_SERVER_SSL
+#if WITH_WSS
     tcp_ssl_cleanup();
 #endif
     dtls_srtp_cleanup();
