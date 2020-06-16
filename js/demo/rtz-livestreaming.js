@@ -1,4 +1,4 @@
-var server = 'ws://172.16.3.102:9443/rtz';
+var server = 'wss://aitest.andcam.cn:18443/rtz';
 //var server = 'ws://172.20.226.86:443/rtz';
 //var server = 'ws://192.168.2.55:443/rtz';
 //var server = 'ws://47.94.164.7:30002/rtz';
@@ -61,7 +61,7 @@ function startStream(url) {
 				url: url,
 				transport: "tcp",
 				min_delay: 0,
-				redirect: 0,
+				redirect: 1,
 				success: function(handle) {
 					rtzHandle = handle;
 				},
@@ -107,7 +107,7 @@ function startStream(url) {
 							{
 								jsep: jsep,
 								// We want recvonly audio/video and, if negotiated, datachannels
-								media: { audioSend: true, audioRecv: true, videoSend: false, data: true },
+								media: { audioSend: false, audioRecv: true, videoSend: false, data: true },
 								success: function(jsep) {
 									rtz.debug("Got SDP!");
 									rtz.debug(jsep);

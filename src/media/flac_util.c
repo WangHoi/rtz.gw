@@ -3,9 +3,11 @@
 #include "sbuf.h"
 #include "log.h"
 #include "g711.h"
+#include "wav.h"
 #include <stdint.h>
 #include <assert.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 /* CRC-8, poly = x^8 + x^2 + x^1 + x^0, init = 0 */
@@ -122,9 +124,37 @@ int pack_flac_metadata_stream_info(void *data, struct FLACMetadataStreamInfo *in
     return FLAC_METADATA_STREAMINFO_SIZE;
 }
 
+static FILE *s_pcma_file = NULL;
+static FILE *s_pcm_file = NULL;
+static unsigned s_samples = 0;
+static struct wav_header s_pcma_wav_hdr;
+static struct wav_header s_pcm_wav_hdr;
+
+void init_wav_header(struct wav_header *hdr, uint16_t audio_format)
+{
+    memset(hdr, 0, sizeof(struct wav_header));
+    hdr->chunk_id = 0x46464952;
+    hdr->format = 0x45564157;
+    hdr->sub_chunk1_id = 0x20746d66;
+    hdr->sub_chunk1_size = 16;
+    hdr->audio_format = audio_format;
+    hdr->num_channels = 1;
+    hdr->sample_rate = 8000;
+    hdr->bits_per_sample = (audio_format == 1) ? 16 : 8;
+    hdr->byte_rate = hdr->sample_rate * hdr->num_channels * hdr->bits_per_sample / 8;
+    hdr->block_align = hdr->num_channels * hdr->bits_per_sample / 8;
+    hdr->sub_chunk2_id = 0x61746164;
+}
+void update_wav_header(struct wav_header *hdr, uint32_t num_samples)
+{
+    hdr->sub_chunk2_size = num_samples * hdr->num_channels * hdr->bits_per_sample / 8;
+    hdr->chunk_size = 36 + hdr->sub_chunk2_size;
+}
+
 sbuf_t *flac_encode_pcma(const void *data, int samples)
 {
-    int block_size = 320;
+    int block_size = samples;
+    //int block_size = 320;
     //int sample_rate = 8000;
     sbuf_t *sb = sbuf_new1(64 + 2 * samples);
 
@@ -141,6 +171,38 @@ sbuf_t *flac_encode_pcma(const void *data, int samples)
     *p++ = 0x02;    // VERBATIM, zero wasted bits
     int olen = samples * 2;
     olen = g711_decode(p, &olen, data, samples, TP_ALAW);
+    /*
+    if (!s_pcma_file) {
+        s_pcma_file = fopen("pcma.wav", "wb");
+        init_wav_header(&s_pcma_wav_hdr, 6);
+        s_pcm_file = fopen("pcm.wav", "wb");
+        init_wav_header(&s_pcm_wav_hdr, 1);
+    }
+    if (s_samples < 10 * 8000) {
+        s_samples += samples;
+        update_wav_header(&s_pcma_wav_hdr, s_samples);
+        fseek(s_pcma_file, 0, SEEK_SET);
+        fwrite(&s_pcma_wav_hdr, sizeof(s_pcma_wav_hdr), 1, s_pcma_file);
+        fseek(s_pcma_file, 0, SEEK_END);
+        fwrite(data, samples, 1, s_pcma_file);
+
+        update_wav_header(&s_pcm_wav_hdr, s_samples);
+        fseek(s_pcm_file, 0, SEEK_SET);
+        fwrite(&s_pcm_wav_hdr, sizeof(s_pcm_wav_hdr), 1, s_pcm_file);
+        fseek(s_pcm_file, 0, SEEK_END);
+        fwrite(p, 2 * samples, 1, s_pcm_file);
+    } else {
+        fclose(s_pcma_file);
+        fclose(s_pcm_file);
+        _exit(0);
+    }
+    */
+    // Convert PCM samples to Big Endian
+    for (int i = 0; i < samples; ++i) {
+        char tmp = p[i * 2];
+        p[i * 2] = p[i * 2 + 1];
+        p[i * 2 + 1] = tmp;
+    }
     p += samples * 2;
     p += pack_be16(p, compute_flac_crc16(sb->data, p - sb->data));
     sb->size = p - sb->data;

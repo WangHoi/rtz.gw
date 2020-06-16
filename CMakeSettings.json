@@ -4,7 +4,7 @@
       "name": "Linux",
       "generator": "Unix Makefiles",
       "remoteMachineName": "568082661;172.16.3.102 (username=root, port=22, authentication=Password)",
-      "configurationType": "Debug",
+      "configurationType": "RelWithDebInfo",
       "remoteCMakeListsRoot": "/var/tmp/src/${workspaceHash}/${name}",
       "cmakeExecutable": "/usr/local/bin/cmake",
       "buildRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\build\\${name}",
@@ -23,7 +23,8 @@
       "ctestCommandArgs": "",
       "inheritEnvironments": [ "linux_x64" ],
       "variables": [],
-      "intelliSenseMode": "linux-gcc-x64"
+      "intelliSenseMode": "linux-gcc-x64",
+      "addressSanitizerEnabled": false
     }
   ]
 }

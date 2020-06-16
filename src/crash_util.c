@@ -1,4 +1,4 @@
-#include "crash_util.h"
+﻿#include "crash_util.h"
 #include "log.h"
 #include <signal.h>
 #define UNW_LOCAL_ONLY
@@ -119,8 +119,7 @@ static void segfault_handler(int sig, siginfo_t *info, void *ctx)
 
     print_stack_trace(uap);
     msg_text[msg_len++] = 0;
-    llog_raw(msg_text, 0);
-    llog_flush();
+    write(STDERR_FILENO, msg_text, msg_len);
 
     /*
      * Restore the original signal handler and propagate the signal.

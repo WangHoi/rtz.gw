@@ -44,6 +44,7 @@ load： 负载信息，流媒体服务器的推流和取流路数
 
 extern const char *ZK_HOST;
 extern const char *RTZ_PUBLIC_IP;
+extern const char* RTZ_PUBLIC_IPV6;
 extern const char *RTZ_LOCAL_IP;
 extern int RTZ_PUBLIC_SIGNAL_PORT;
 extern int RTZ_PUBLIC_HLS_PORT;
@@ -127,10 +128,39 @@ void zk_mkdir(zhandle_t *handle, const char *service_name, sbuf_t *real_path,
     }
     char realpath[1024] = { 0 };
     char text[1024];
-    snprintf(text, sizeof(text), "{\"public_host\": \"%s:%d\",\"local_host\": \"%s:%d\","
-        " \"public_replay_host\": \"%s:%d\", \"origin_host\":\"%s\", \"mode\":2, \"load\": %d}",
-        public_ip, public_port, local_ip, local_port,
-        public_ip, public_replay_port, ORIGIN_HOST, 0);
+    if (RTZ_PUBLIC_IPV6) {
+        snprintf(text, sizeof(text), "{"
+            "\"public_host\": \"%s:%d\","
+            "\"Ipv6_public_host\": \"[%s]:%d\","
+            "\"local_host\": \"%s:%d\","
+            "\"public_replay_host\": \"%s:%d\","
+            "\"Ipv6_public_replay_host\": \"[%s]:%d\","
+            "\"origin_host\":\"%s\","
+            "\"mode\":2,"
+            "\"load\": %d"
+            "}",
+            public_ip, public_port,
+            RTZ_PUBLIC_IPV6, public_port,
+            local_ip, local_port,
+            public_ip, public_replay_port,
+            RTZ_PUBLIC_IPV6, public_replay_port,
+            ORIGIN_HOST,
+            0);
+    } else {
+        snprintf(text, sizeof(text), "{"
+            "\"public_host\": \"%s:%d\","
+            "\"local_host\": \"%s:%d\","
+            "\"public_replay_host\": \"%s:%d\","
+            "\"origin_host\":\"%s\","
+            "\"mode\":2,"
+            "\"load\": %d"
+            "}",
+            public_ip, public_port,
+            local_ip, local_port,
+            public_ip, public_replay_port,
+            ORIGIN_HOST,
+            0);
+    }
     ret = zoo_create(handle, service_name, text, strlen(text), &ZOO_OPEN_ACL_UNSAFE,
                      ZOO_EPHEMERAL | ZOO_SEQUENCE, realpath, sizeof(realpath) - 1);
     if (ret == ZOK) {
@@ -164,11 +194,37 @@ void zk_update(zhandle_t *handle, const char *real_path,
                const char *local_ip, int local_port)
 {
     char text[1024];
-    snprintf(text, sizeof(text), "{\"public_host\": \"%s:%d\",\"local_host\": \"%s:%d\","
-        " \"public_replay_host\":\"%s:%d\", \"origin_host\":\"%s\", \"mode\":2, \"load\": %d}",
-        public_ip, public_port, local_ip, local_port,
-        public_ip, public_replay_port,
-        ORIGIN_HOST, rtz_shard_get_total_load());
+    if (RTZ_PUBLIC_IPV6) {
+        snprintf(text, sizeof(text), "{"
+            "\"public_host\": \"%s:%d\","
+            "\"Ipv6_public_host\": \"[%s]:%d\","
+            "\"local_host\": \"%s:%d\","
+            "\"public_replay_host\":\"%s:%d\","
+            "\"Ipv6_public_replay_host\":\"[%s]:%d\","
+            "\"origin_host\":\"%s\","
+            "\"mode\":2,"
+            "\"load\": %d}",
+            public_ip, public_port,
+            RTZ_PUBLIC_IPV6, public_port,
+            local_ip, local_port,
+            public_ip, public_replay_port,
+            RTZ_PUBLIC_IPV6, public_replay_port,
+            ORIGIN_HOST,
+            rtz_shard_get_total_load());
+    } else {
+        snprintf(text, sizeof(text), "{"
+            "\"public_host\": \"%s:%d\","
+            "\"local_host\": \"%s:%d\","
+            "\"public_replay_host\":\"%s:%d\","
+            "\"origin_host\":\"%s\","
+            "\"mode\":2,"
+            "\"load\": %d}",
+            public_ip, public_port,
+            local_ip, local_port,
+            public_ip, public_replay_port,
+            ORIGIN_HOST,
+            rtz_shard_get_total_load());
+    }
     int ret = zoo_set(handle, real_path, text, strlen(text), -1);
     if (ret != ZOK) {
         LLOG(LL_ERROR, "zoo_set error %d", ret);

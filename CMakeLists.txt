@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.10)
 project(rtz.gw C ASM)
-set(RTZ_VERSION "0.2.4")
+set(RTZ_VERSION "0.2.7")
 
 set(OPENSSL_ROOT_DIR 3rdparty/openssl-1.1.0j)
 set(OPENSSL_INCLUDE_DIRS ${OPENSSL_ROOT_DIR}/include)
@@ -19,7 +19,7 @@ add_subdirectory(3rdparty/cJSON-1.7.10)
 
 option(WITH_HTTP_HOOKS "enable http hooks" OFF)
 option(WITH_WSS "enable signal server WSS mode" OFF)
-option(WITH_ASAN "enable address sanitizer" OFF)
+option(WITH_ASAN "enable address sanitizer" ON)
 option(WITH_TSAN "enable thread sanitizer" OFF)
 option(WITH_TCMALLOC "link with tcmalloc" OFF)
 option(WITH_ZOOKEEPER "enable zookeeper integration" OFF)

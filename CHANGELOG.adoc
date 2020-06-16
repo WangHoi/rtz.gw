@@ -1,9 +1,20 @@
 = CHANGELOG
 Hoi Wang <wanghoi@126.com>
 
+== 0.2.7
+
+ipv6 support
+bug fixes
+
+== 0.2.5
+
+02/29/2020
+
+- Fix audio bug 
+
 == 0.2.4
 
-12/??/2019
+12/31/2019
 
 - report bandwidth in on_timer_event 
 

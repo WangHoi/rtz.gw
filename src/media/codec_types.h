@@ -1,4 +1,5 @@
-﻿#pragma once
+#pragma once
+#include "wav.h"
 #include "aac.h"
 
 typedef struct sbuf_t sbuf_t;

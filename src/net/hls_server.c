@@ -1,4 +1,4 @@
-﻿#include "hls_server.h"
+#include "hls_server.h"
 #include "event_loop.h"
 #include "tcp_chan.h"
 #include "list.h"
@@ -10,6 +10,8 @@
 #include "media/fmp4_mux.h"
 #include "media/codec_types.h"
 #include "media/flac_util.h"
+#include "net/tcp_chan.h"
+#include "net/tcp_chan_ssl.h"
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -27,7 +29,8 @@
 #include <time.h>
 #include <math.h>
 
-#undef HTTP_NO_HOOK
+//#define HTTP_NO_HOOK 1
+#define DISABLE_AUDIO 0
 
 enum http_parse_state {
     HTTP_PARSE_HEADER,
@@ -61,9 +64,42 @@ typedef struct http_peer_t http_peer_t;
 typedef struct hls_stream_t hls_stream_t;
 typedef struct hls_fragment_t hls_fragment_t;
 
+/* Handle (Secure)WebSocket protocol */
+#if WITH_WSS
+#define TCP_SRV_T tcp_srv_ssl_t
+#define TCP_SRV_BIND tcp_srv_ssl_bind
+#define TCP_SRV_LISTEN tcp_srv_ssl_listen
+#define TCP_SRV_SET_CB tcp_srv_ssl_set_cb
+#define TCP_SRV_NEW tcp_srv_ssl_new
+#define TCP_SRV_DEL tcp_srv_ssl_del
+#define TCP_CHAN_T tcp_chan_ssl_t
+#define TCP_CHAN_CLOSE tcp_chan_ssl_close
+#define TCP_CHAN_SET_CB tcp_chan_ssl_set_cb
+#define TCP_CHAN_READC tcp_chan_ssl_readc
+#define TCP_CHAN_READ_BUF_EMPTY tcp_chan_ssl_read_buf_empty
+#define TCP_CHAN_GET_READ_BUF_SIZE tcp_chan_ssl_get_read_buf_size
+#define TCP_CHAN_READ tcp_chan_ssl_read
+#define TCP_CHAN_WRITE tcp_chan_ssl_write
+#else
+#define TCP_SRV_T tcp_srv_t
+#define TCP_SRV_BIND tcp_srv_bind
+#define TCP_SRV_LISTEN tcp_srv_listen
+#define TCP_SRV_SET_CB tcp_srv_set_cb
+#define TCP_SRV_NEW tcp_srv_new
+#define TCP_SRV_DEL tcp_srv_del
+#define TCP_CHAN_T tcp_chan_t
+#define TCP_CHAN_CLOSE tcp_chan_close
+#define TCP_CHAN_SET_CB tcp_chan_set_cb
+#define TCP_CHAN_READC tcp_chan_readc
+#define TCP_CHAN_READ_BUF_EMPTY tcp_chan_read_buf_empty
+#define TCP_CHAN_GET_READ_BUF_SIZE tcp_chan_get_read_buf_size
+#define TCP_CHAN_READ tcp_chan_read
+#define TCP_CHAN_WRITE tcp_chan_write
+#endif
+
 struct hls_server_t {
     zl_loop_t *loop;
-    tcp_srv_t *tcp_srv;
+    TCP_SRV_T *tcp_srv;
     int timer;
 
     struct list_head peer_list;     /* http_peer_t list */
@@ -74,7 +110,7 @@ struct http_peer_t {
     struct list_head link;  // link to hls_server_t.peer_list
 
     hls_server_t *srv;
-    tcp_chan_t *chan;
+    TCP_CHAN_T *chan;
     hls_stream_t *stream;
 
     enum http_parse_state parse_state;
@@ -124,6 +160,12 @@ struct hls_stream_t {
     long long last_in_time;
     long long last_out_time;
 
+    long long video_counter;
+    long long audio_counter;
+    long long last_audio_timestamp;
+    int gen_silence;
+    long long expect_audio_timestamp;
+
     long hook_client_id;            /* http hook, -1 if invalid */
     long recv_bytes;
     long send_bytes;
@@ -145,12 +187,12 @@ extern int RTZ_PUBLIC_HLS_PORT;
 
 extern void make_origin_url(sbuf_t *origin_url, const char *tc_url, const char *stream_name);
 
-static void accept_handler(tcp_srv_t *tcp_srv, tcp_chan_t *chan, void *udata);
+static void accept_handler(TCP_SRV_T *tcp_srv, TCP_CHAN_T *chan, void *udata);
 static void http_request_handler(http_peer_t *peer, http_request_t *req);
-static void peer_data_handler(tcp_chan_t *chan, void *udata);
-static void peer_error_handler(tcp_chan_t *chan, int status, void *udata);
+static void peer_data_handler(TCP_CHAN_T *chan, void *udata);
+static void peer_error_handler(TCP_CHAN_T *chan, int status, void *udata);
 
-static http_peer_t *http_peer_new(hls_server_t *srv, tcp_chan_t *chan);
+static http_peer_t *http_peer_new(hls_server_t *srv, TCP_CHAN_T *chan);
 static void http_peer_del(http_peer_t *peer);
 static void send_final_reply(http_peer_t *peer, http_status_t status);
 static void send_reply_data(http_peer_t *peer, const void *data, int size);
@@ -188,7 +230,7 @@ hls_server_t *hls_server_new(zl_loop_t *loop)
     srv = malloc(sizeof(hls_server_t));
     memset(srv, 0, sizeof(hls_server_t));
     srv->loop = loop;
-    srv->tcp_srv = tcp_srv_new(loop);
+    srv->tcp_srv = TCP_SRV_NEW(loop);
     INIT_LIST_HEAD(&srv->peer_list);
     INIT_LIST_HEAD(&srv->stream_list);
     srv->timer = zl_timer_start(loop, HLS_CRON_TIMEOUT_MSECS, HLS_CRON_TIMEOUT_MSECS, hls_server_cron, srv);
@@ -198,25 +240,25 @@ hls_server_t *hls_server_new(zl_loop_t *loop)
 
 void hls_server_del(hls_server_t *srv)
 {
-    tcp_srv_del(srv->tcp_srv);
+    TCP_SRV_DEL(srv->tcp_srv);
     zl_timer_stop(srv->loop, srv->timer);
     free(srv);
 }
 
 int hls_server_bind(hls_server_t *srv, unsigned short port)
 {
-    return tcp_srv_bind(srv->tcp_srv, NULL, port);
+    return TCP_SRV_BIND(srv->tcp_srv, NULL, port);
 }
 
 int hls_server_start(hls_server_t *srv)
 {
-    tcp_srv_set_cb(srv->tcp_srv, accept_handler, srv);
-    return tcp_srv_listen(srv->tcp_srv);
+    TCP_SRV_SET_CB(srv->tcp_srv, accept_handler, srv);
+    return TCP_SRV_LISTEN(srv->tcp_srv);
 }
 
 void hls_server_stop(hls_server_t *srv)
 {
-    tcp_srv_set_cb(srv->tcp_srv, NULL, NULL);
+    TCP_SRV_SET_CB(srv->tcp_srv, NULL, NULL);
     http_peer_t *p, *ptmp;
     list_for_each_entry_safe(p, ptmp, &srv->peer_list, link) {
         http_peer_del(p);
@@ -236,23 +278,24 @@ void hls_server_kick_stream(hls_server_t * srv, const char * tc_url, const char 
     }
 }
 
-void accept_handler(tcp_srv_t *tcp_srv, tcp_chan_t *chan, void *udata)
+void accept_handler(TCP_SRV_T *tcp_srv, TCP_CHAN_T *chan, void *udata)
 {
     hls_server_t *srv = udata;
     http_peer_t *peer = http_peer_new(srv, chan);
     if (!peer) {
         LLOG(LL_ERROR, "http_peer_new error.");
+        TCP_CHAN_CLOSE(chan, 0);
         return;
     }
-    tcp_chan_set_cb(peer->chan, peer_data_handler, NULL, peer_error_handler, peer);
+    TCP_CHAN_SET_CB(peer->chan, peer_data_handler, NULL, peer_error_handler, peer);
 }
 
-void peer_data_handler(tcp_chan_t *chan, void *udata)
+void peer_data_handler(TCP_CHAN_T *chan, void *udata)
 {
     http_peer_t *peer = udata;
-    while (!tcp_chan_read_buf_empty(chan)) {
+    while (!TCP_CHAN_READ_BUF_EMPTY(chan)) {
         if (peer->parse_state == HTTP_PARSE_HEADER) {
-            char c = tcp_chan_readc(chan);
+            char c = TCP_CHAN_READC(chan);
             sbuf_appendc(peer->parse_buf, c);
             if (sbuf_ends_with(peer->parse_buf, "\r\n\r\n")) {
                 http_request_t *req = http_parse_request(peer, peer->parse_buf->data,
@@ -271,8 +314,8 @@ void peer_data_handler(tcp_chan_t *chan, void *udata)
                 }
             }
         } else if (peer->parse_state == HTTP_PARSE_BODY) {
-            if (peer->parse_request->body_len <= tcp_chan_get_read_buf_size(chan)) {
-                tcp_chan_read(chan, peer->parse_request->body,
+            if (peer->parse_request->body_len <= TCP_CHAN_GET_READ_BUF_SIZE(chan)) {
+                TCP_CHAN_READ(chan, peer->parse_request->body,
                     peer->parse_request->body_len);
                 http_request_handler(peer, peer->parse_request);
                 peer->parse_request = NULL;
@@ -290,14 +333,14 @@ void peer_data_handler(tcp_chan_t *chan, void *udata)
     }
 }
 
-void peer_error_handler(tcp_chan_t *chan, int status, void *udata)
+void peer_error_handler(TCP_CHAN_T *chan, int status, void *udata)
 {
     http_peer_t *peer = udata;
     LLOG(LL_ERROR, "peer %p event %d.", peer, status);
     http_peer_del(peer);
 }
 
-http_peer_t *http_peer_new(hls_server_t *srv, tcp_chan_t *chan)
+http_peer_t *http_peer_new(hls_server_t *srv, TCP_CHAN_T *chan)
 {
     http_peer_t *peer = malloc(sizeof(http_peer_t));
     if (peer == NULL)
@@ -318,7 +361,7 @@ void http_peer_del(http_peer_t * peer)
     //LLOG(LL_TRACE, "delete http_peer %p", peer);
     if (peer->parse_request)
         http_request_del(peer->parse_request);
-    tcp_chan_close(peer->chan, 0);
+    TCP_CHAN_CLOSE(peer->chan, 0);
     sbuf_del(peer->parse_buf);
     sbuf_del(peer->url_path);
     list_del(&peer->link);
@@ -331,14 +374,14 @@ void send_final_reply(http_peer_t *peer, http_status_t status)
         return;
     char *s;
     int n = asprintf(&s, "HTTP/1.1 %d %s\r\n"
-        "Connection:Keepalive\r\n"
+        "Connection:keep-alive\r\n"
         "Access-Control-Allow-Origin:*\r\n"
         "Access-Control-Allow-Headers:range\r\n"
         "Access-Control-Allow-Methods:GET\r\n"
         "\r\n",
         status, http_strstatus(status));
     if (n > 0) {
-        tcp_chan_write(peer->chan, s, n);
+        TCP_CHAN_WRITE(peer->chan, s, n);
         free(s);
     }
     //peer->flag |= HTTP_PEER_CLOSE_ASAP;
@@ -350,16 +393,16 @@ void send_reply_data(http_peer_t *peer, const void *data, int size)
         return;
     char *s;
     int n = asprintf(&s, "HTTP/1.1 200 OK\r\n"
-        "Connection:Keepalive\r\n"
+        "Connection:keep-alive\r\n"
         "Content-Length:%d\r\n"
         "Access-Control-Allow-Origin:*\r\n"
         "Access-Control-Allow-Headers:range\r\n"
         "Access-Control-Allow-Methods:GET\r\n"
         "\r\n",
         size);
-    tcp_chan_write(peer->chan, s, n);
+    TCP_CHAN_WRITE(peer->chan, s, n);
     free(s);
-    tcp_chan_write(peer->chan, data, size);
+    TCP_CHAN_WRITE(peer->chan, data, size);
     //peer->flag |= HTTP_PEER_CLOSE_ASAP;
 }
 void http_request_handler(http_peer_t *peer, http_request_t *req)
@@ -403,8 +446,7 @@ void http_request_handler(http_peer_t *peer, http_request_t *req)
             rtmp_client_t *client = rtmp_client_new(peer->srv->loop, 0);
             sbuf_t *origin_url = sbuf_new1(1024);
             make_origin_url(origin_url, stream->tc_url->data, stream->stream_name->data);
-            //sbuf_strcpy(origin_url, "rtmp://172.16.3.103:1935/live?token=efa24a65b2dc819caacdcc65|type=pass|rtmpUrltype=clientFetch|systemType=2|live=0|tId=78932095595549696|lHost172.16.3.103:1935/cloudRecord_01101002D8F06135E_0_0_0_06931d1e685d4f84a327f25bdfecfe94");
-            //sbuf_strcpy(origin_url, "rtmp://172.16.3.103:19358/live/cloudRecord_testvideo");
+            //sbuf_strcpy(origin_url, "rtmp://172.20.213.80/live/stream");
             rtmp_client_set_uri(client, origin_url->data);
             rtmp_client_tcp_connect(client, NULL);
             rtmp_client_set_userdata(client, stream);
@@ -584,6 +626,8 @@ void hls_stream_del(hls_stream_t *stream)
  * '/live?token=XX/cloudRecord_xx.m3u8' -> 'cloudRecord_xx', ''
  * '/live/cloudRecord_xx.mp4' -> 'cloudRecord_xx', ''
  * '/live/cloudRecord_xx/0.m4s' -> 'cloudRecord_xx', '0.m4s'
+ * '/cloudRecord_xx.mp4' -> 'cloudRecord_xx', ''
+ * '/cloudRecord_xx/0.m4s' -> 'cloudRecord_xx', '0.m4s'
  */
 void parse_fragment_path(sbuf_t *stream_name, sbuf_t *frag_name, const char *path)
 {
@@ -650,14 +694,48 @@ void rtmp_audio_handler(int64_t timestamp, uint16_t sframe_time,
         return;
     if (h->acodec_type != AUDIO_CODEC_PCMA)
         return;
+    //if (h->gen_silence)
+        //return;
+    ++h->audio_counter;
 
+    LLOG(LL_TRACE, "ts=%lld ets=%lld dt=%lld\n", (long long)timestamp,
+        h->expect_audio_timestamp, (long long)timestamp - h->expect_audio_timestamp);
+
+    if (h->expect_audio_timestamp == 0)
+        h->expect_audio_timestamp = timestamp;
+    sbuf_t *flac_frame = flac_encode_pcma(data, size);
+    if (timestamp != h->expect_audio_timestamp) {
+        long long dt = timestamp - h->expect_audio_timestamp;
+        long long span_ms = size / 8;
+        long long drop_threhold = 5 * span_ms;
+        long long insert_threhold = span_ms * 3 / 4;
+        LLOG(LL_WARN, "audio %s mismatch ts=%lld dt=%lld",
+            h->stream_name->data, (long long)timestamp, dt);
+        if (dt < -drop_threhold) {
+            // drop early sample
+            LLOG(LL_TRACE, "        drop");
+            return;
+        } else if (dt > insert_threhold) {
+            //sbuf_t *sb = flac_gen_silence(span_ms * 8);
+            while (dt > insert_threhold) {
+                fmp4_mux_media_sample(h->mux_ctx, 0, h->expect_audio_timestamp * 8,
+                    span_ms * 8, 1, flac_frame->data, flac_frame->size);
+                dt -= span_ms;
+                h->expect_audio_timestamp += span_ms;
+            }
+            //sbuf_del(sb);
+            LLOG(LL_WARN, "        after fix ts=%lld dt=%lld",
+                h->expect_audio_timestamp, dt);
+        }
+        timestamp = h->expect_audio_timestamp;
+    }
     int64_t pts = timestamp * 8;
-    int32_t duration = size;
-    int samples = duration;
-    sbuf_t *flac_frame = flac_encode_pcma(data, samples);
-    fmp4_mux_media_sample(h->mux_ctx, 0, pts, duration,
+    //LLOG(LL_TRACE, "audio ts=%ld size=%d flac_frame_size=%d",
+    //    timestamp, size, flac_frame->size);
+    fmp4_mux_media_sample(h->mux_ctx, 0, pts, size,
         key_frame, flac_frame->data, flac_frame->size);
     sbuf_del(flac_frame);
+    h->expect_audio_timestamp = timestamp + size / 8;
 }
 
 void rtmp_video_handler(int64_t timestamp, uint16_t sframe_time,
@@ -703,6 +781,42 @@ void rtmp_video_handler(int64_t timestamp, uint16_t sframe_time,
     if (!h->mux_started)
         return;
     h->last_in_time = zl_time();
+
+#if 0
+    ++h->video_counter;
+    if (h->acodec_type == AUDIO_CODEC_PCMA && h->audio_counter == 0 && h->video_counter > 10) {
+        if (!h->gen_silence) {
+            h->gen_silence = 1;
+            LLOG(LL_WARN, "%s start generate silence samples", h->stream_name->data);
+        }
+        if (h->last_audio_timestamp <= timestamp) {
+            int64_t audio_pts;
+            sbuf_t *sb = flac_gen_silence(320);
+            do {
+                audio_pts = 8 * h->last_audio_timestamp;
+                //LLOG(LL_TRACE, "insert silence pts=%ld", audio_pts);
+                fmp4_mux_media_sample(h->mux_ctx, 0, audio_pts,
+                    320, 1, sb->data, sb->size);
+                h->last_audio_timestamp += 40;
+            } while (h->last_audio_timestamp <= timestamp);
+            sbuf_del(sb);
+        }
+    }
+#endif
+    if (h->acodec_type == AUDIO_CODEC_PCMA && timestamp - h->expect_audio_timestamp >= 400) {
+        long long dt = timestamp - h->expect_audio_timestamp;
+        sbuf_t *sb = flac_gen_silence(320);
+        while (dt >= 30) {
+            LLOG(LL_TRACE, "%s insert silence timestamp=%lld", h->stream_name->data,
+                h->expect_audio_timestamp);
+            fmp4_mux_media_sample(h->mux_ctx, 0, h->expect_audio_timestamp * 8,
+                320, 1, sb->data, sb->size);
+            h->expect_audio_timestamp += 40;
+            dt -= 40;
+        }
+        sbuf_del(sb);
+    }
+
     fmp4_mux_media_sample(h->mux_ctx, 1, timestamp * 90,
         sframe_time * 90, key_frame, data, size);
 }
@@ -714,7 +828,7 @@ void rtmp_video_codec_handler(const void *data, int size, void *udata)
     if (!changed)
         return;
 
-    //LLOG(LL_TRACE, "vcodec handler");
+    LLOG(LL_TRACE, "vcodec handler acodec_type=%d", (int)h->acodec_type);
 
     if (h->acodec_type == AUDIO_CODEC_PCMA) {
         uint8_t dfla[4 + FLAC_METADATA_STREAMINFO_SIZE];
@@ -746,8 +860,14 @@ void rtmp_video_codec_handler(const void *data, int size, void *udata)
 
 void rtmp_metadata_handler(int vcodec, int acodec, double videotime, void *udata)
 {
+#if DISABLE_AUDIO
     acodec = INVALID_AUDIO_CODEC;
+#endif
     hls_stream_t *h = udata;
+    if (vcodec != h->vcodec_type || acodec != h->acodec_type) {
+        LLOG(LL_TRACE, "%s metadata handler vcodec=%d acodec=%d",
+            h->stream_name->data, vcodec, acodec);
+    }
     h->vcodec_type = vcodec;
     h->acodec_type = acodec;
     h->pdt_changed = (long)videotime;

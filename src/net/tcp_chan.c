@@ -1,4 +1,4 @@
-﻿#include "tcp_chan.h"
+#include "tcp_chan.h"
 #include "nbuf.h"
 #include "net_util.h"
 #include "event_loop.h"
@@ -32,7 +32,7 @@ enum {
 struct tcp_srv_t {
     zl_loop_t *loop;
     int fd;
-    struct sockaddr_storage addr;
+    //struct sockaddr_storage addr;
     tcp_srv_accept_cb accept_cb;
     void *udata;
     int flags;
@@ -65,8 +65,7 @@ tcp_srv_t *tcp_srv_new(zl_loop_t *loop)
     tcp_srv_t *srv = malloc(sizeof(tcp_srv_t));
     memset(srv, 0, sizeof(tcp_srv_t));
     srv->loop = loop;
-    srv->fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
-    set_socket_reuseport(srv->fd, 1);
+    srv->fd = -1;
     srv->timer = -1;
     return srv;
 }
@@ -77,16 +76,12 @@ void tcp_srv_set_cb(tcp_srv_t *srv, tcp_srv_accept_cb accept_cb, void *udata)
 }
 int tcp_srv_bind(tcp_srv_t *srv, const char *ip, unsigned short port)
 {
-    struct sockaddr_in *addr = (struct sockaddr_in*)&srv->addr;
-    addr->sin_family = AF_INET;
-    addr->sin_port = htons(port);
-    
-    if (!ip || !strcmp(ip, "0.0.0.0"))
-        addr->sin_addr.s_addr = INADDR_ANY;
-    else
-        inet_pton(AF_INET, ip, &addr->sin_addr);
-
-    return bind(srv->fd, (struct sockaddr*)addr, sizeof(struct sockaddr_in));
+    //LLOG(LL_INFO, "binding %s %hu ...", ip ? : "<null>", port);
+    srv->fd = new_and_bind_socket(ip, port);
+    if (srv->fd == -1) {
+        LLOG(LL_ERROR, "tcp_srv_bind %s %hu failed", ip ? : "<null>", port);
+    }
+    return (srv->fd >= 0) ? 0 : -1;
 }
 
 int tcp_srv_listen(tcp_srv_t *srv)

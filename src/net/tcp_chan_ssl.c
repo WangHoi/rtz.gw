@@ -142,8 +142,6 @@ tcp_srv_ssl_t *tcp_srv_ssl_new(zl_loop_t *loop)
     tcp_srv_ssl_t *srv = malloc(sizeof(tcp_srv_ssl_t));
     memset(srv, 0, sizeof(tcp_srv_ssl_t));
     srv->loop = loop;
-    srv->fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
-    set_socket_reuseport(srv->fd, 1);
     return srv;
 }
 void tcp_srv_ssl_set_cb(tcp_srv_ssl_t *srv, tcp_srv_ssl_accept_cb accept_cb, void *udata)
@@ -153,16 +151,8 @@ void tcp_srv_ssl_set_cb(tcp_srv_ssl_t *srv, tcp_srv_ssl_accept_cb accept_cb, voi
 }
 int tcp_srv_ssl_bind(tcp_srv_ssl_t *srv, const char *ip, unsigned short port)
 {
-    struct sockaddr_in *addr = (struct sockaddr_in*)&srv->addr;
-    addr->sin_family = AF_INET;
-    addr->sin_port = htons(port);
-    
-    if (!ip || !strcmp(ip, "0.0.0.0"))
-        addr->sin_addr.s_addr = INADDR_ANY;
-    else
-        inet_pton(AF_INET, ip, &addr->sin_addr);
-
-    return bind(srv->fd, (struct sockaddr*)addr, sizeof(struct sockaddr_in));
+    srv->fd = new_and_bind_socket(ip, port);
+    return (srv->fd >= 0) ? 0 : -1;
 }
 
 int tcp_srv_ssl_listen(tcp_srv_ssl_t *srv)
@@ -310,7 +300,7 @@ int tcp_chan_ssl_write(tcp_chan_ssl_t *chan, const void *data, int size)
             iov_cnt = ARRAY_SIZE(iov);
             nbuf_reserve(chan->snd_buf, iov, &iov_cnt);
             n = BIO_read(chan->write_bio, iov[0].iov_base, iov[0].iov_len);
-            LLOG(LL_TRACE, "write_bio %p ret=%d", iov[0].iov_base, n);
+            //LLOG(LL_TRACE, "write_bio %p ret=%d", iov[0].iov_base, n);
             if (n > 0)
                 nbuf_commit(chan->snd_buf, n);
         } while (n > 0);
@@ -346,7 +336,7 @@ void chan_fd_event_handler(zl_loop_t *loop, int fd, uint32_t events, void *udata
     if (events & (EPOLLIN | EPOLLERR | EPOLLHUP)) {
 read_again:
         n = read(fd, buf, sizeof(buf));
-        LLOG(LL_TRACE, "read fd %d, ret=%d", fd, n);
+        //LLOG(LL_TRACE, "read fd %d, ret=%d", fd, n);
         if (n == 0) {
             err = 0;
             chan->flags |= TCP_CHAN_ERROR;
@@ -417,7 +407,7 @@ write_again:
                 n = write(fd, iov[0].iov_base, iov[0].iov_len);
             else
                 n = writev(fd, iov, iov_cnt);
-            LLOG(LL_TRACE, "write ret %d", n);
+            //LLOG(LL_TRACE, "write ret %d", n);
             if (n > 0) {
                 nbuf_consume(chan->snd_buf, n);
             } else if (n == -1) {

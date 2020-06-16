@@ -7,7 +7,7 @@
 #include <string.h>
 #include <assert.h>
 
-#define MAX_SAMPLE_SIZE 100
+#define MAX_SAMPLE_SIZE 400
 
 typedef struct fmp4_sample_info_t {
     int64_t pts;
@@ -412,9 +412,11 @@ void fmp4_mux_media_sample(fmp4_mux_t * ctx,
     int key_frame, const char *data, int size)
 {
     int track_idx = video ? 0 : 1;
-    LLOG(LL_DEBUG, "#%d pts=%lld key=%d size=%d", track_idx, (long long)pts, key_frame, size);
-    //assert(ctx->sample_count[track_idx] < MAX_SAMPLE_SIZE);
+    //LLOG(LL_DEBUG, "#%d pts=%lld key=%d size=%d", track_idx, (long long)pts, key_frame, size);
+    assert(ctx->sample_count[track_idx] < MAX_SAMPLE_SIZE);
     if (ctx->sample_count[track_idx] >= MAX_SAMPLE_SIZE) {
+        LLOG(LL_ERROR, "#%d pts=%lld key=%d size=%d exceeds fragment's sample limit.",
+            track_idx, (long long)pts, key_frame, size);
         return;
     }
     int sample_idx = ctx->sample_count[track_idx]++;
@@ -523,7 +525,7 @@ void fmp4_mux_media_end(fmp4_mux_t *ctx,
     }
 
     sbuf_clear(ctx->moof_buf);
-    sbuf_makeroom(ctx->moof_buf, 4096);
+    sbuf_makeroom(ctx->moof_buf, 4096 * 4);
     char *p = ctx->moof_buf->data;
     char *const moof_size_ptr = p;
     char *data_offset_ptr[2] = {};
@@ -540,6 +542,8 @@ void fmp4_mux_media_end(fmp4_mux_t *ctx,
     pack_be32(moof_size_ptr, p - moof_size_ptr);
     p += write_box(p, "mdat", 8 + ctx->data_buf[0]->size + ctx->data_buf[1]->size);
     ctx->moof_buf->size = p - ctx->moof_buf->data;
+
+    LLOG(LL_TRACE, "moof size=%lld", (long long)(p - ctx->moof_buf->data));
 
     /* Backpatch data_offset_ptr */
     if (data_offset_ptr[0])

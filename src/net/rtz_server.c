@@ -38,6 +38,7 @@
 
 extern const char *RTZ_LOCAL_IP;
 extern const char *RTZ_PUBLIC_IP;
+extern const char *RTZ_PUBLIC_IPV6;
 extern const char *ORIGIN_HOST;
 extern int RTZ_PUBLIC_MEDIA_PORT;
 extern int RTZ_LOCAL_MEDIA_PORT;
@@ -238,7 +239,7 @@ rtz_server_t *rtz_server_new(zl_loop_t *loop)
     srv->loop = loop;
     srv->tcp_srv = TCP_SRV_NEW(loop);
     srv->ice_srv = ice_server_new(loop);
-    ice_server_bind(srv->ice_srv, RTZ_LOCAL_IP, RTZ_LOCAL_MEDIA_PORT);
+    ice_server_bind(srv->ice_srv, "0.0.0.0", RTZ_LOCAL_MEDIA_PORT);
     ice_server_start(srv->ice_srv);
     INIT_LIST_HEAD(&srv->peer_list);
     INIT_LIST_HEAD(&srv->session_list);
@@ -293,6 +294,7 @@ void accept_handler(TCP_SRV_T *tcp_srv, TCP_CHAN_T *chan, void *udata)
     http_peer_t *peer = http_peer_new(srv, chan);
     if (!peer) {
         LLOG(LL_ERROR, "http_peer_new error.");
+        TCP_CHAN_CLOSE(chan, 0);
         return;
     }
     TCP_CHAN_SET_CB(peer->chan, peer_data_handler, NULL, peer_error_handler, peer);
@@ -1011,18 +1013,27 @@ sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp)
         "a=ssrc:%"SCNu32" label:rtza0\r\n",
         RTZ_PUBLIC_IP, user, pwd, fingerprint,
         audio_ssrc, audio_ssrc, audio_ssrc, audio_ssrc);
-    if (tcp)
-        sbuf_appendf(
-            sdp,
+    if (tcp) {
+        if (RTZ_PUBLIC_IPV6) {
+            sbuf_appendf(sdp,
+                "a=candidate:1 1 tcp 2013266431 %s %d typ host tcptype passive\r\n",
+                RTZ_PUBLIC_IPV6, RTZ_PUBLIC_MEDIA_PORT);
+        }
+        sbuf_appendf(sdp,
             "a=candidate:1 1 tcp 2013266431 %s %d typ host tcptype passive\r\n"
             "a=end-of-candidates\r\n",
             RTZ_PUBLIC_IP, RTZ_PUBLIC_MEDIA_PORT);
-    else
-        sbuf_appendf(
-            sdp,
+    } else {
+        if (RTZ_PUBLIC_IPV6) {
+            sbuf_appendf(sdp,
+                "a=candidate:1 1 udp 2013266431 %s %d typ host\r\n",
+                RTZ_PUBLIC_IPV6, RTZ_PUBLIC_MEDIA_PORT);
+        }
+        sbuf_appendf(sdp,
             "a=candidate:1 1 udp 2013266431 %s %d typ host\r\n"
             "a=end-of-candidates\r\n",
             RTZ_PUBLIC_IP, RTZ_PUBLIC_MEDIA_PORT);
+    }
 
     ice_flags_set(agent, ICE_HANDLE_WEBRTC_HAS_VIDEO);
     sbuf_appendf(
@@ -1039,8 +1050,8 @@ sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp)
         "a=setup:actpass\r\n"
         "a=rtpmap:96 H264/90000\r\n"
         /* below line not compatible with Firefox */
-        //"a=fmtp:96 profile-level-id=420029; packetization-mode=1; sprop-parameter-sets=Z00AKp2oHgCJ+WbgICAoAAADAAgAAAMBlCA=,aO48gA==\r\n"
-        "a=fmtp:96 profile-level-id=42e01f;level-asymmetry-allowed=1;packetization-mode=1\r\n"
+        "a=fmtp:96 profile-level-id=420029; packetization-mode=1; sprop-parameter-sets=Z00AKp2oHgCJ+WbgICAoAAADAAgAAAMBlCA=,aO48gA==\r\n"
+        //"a=fmtp:96 profile-level-id=42e01f;level-asymmetry-allowed=1;packetization-mode=1\r\n"
         "a=rtcp-fb:96 nack\r\n"
         "a=rtcp-fb:96 nack pli\r\n"
         "a=rtcp-fb:96 goog-remb\r\n"
@@ -1054,19 +1065,29 @@ sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp)
         sdp,
         "a=extmap:6 %s\r\n",
         RTZ_RTP_EXTMAP_PLAYOUT_DELAY);
-    if (tcp)
+    if (tcp) {
+        if (RTZ_PUBLIC_IPV6) {
+            sbuf_appendf(sdp,
+                "a=candidate:1 1 tcp 2013266431 %s %d typ host tcptype passive\r\n",
+                RTZ_PUBLIC_IPV6, RTZ_PUBLIC_MEDIA_PORT);
+        }
         sbuf_appendf(
             sdp,
             "a=candidate:1 1 tcp 2013266431 %s %d typ host tcptype passive\r\n"
             "a=end-of-candidates\r\n",
             RTZ_PUBLIC_IP, RTZ_PUBLIC_MEDIA_PORT);
-    else
+    } else {
+        if (RTZ_PUBLIC_IPV6) {
+            sbuf_appendf(sdp,
+                "a=candidate:1 1 udp 2013266431 %s %d typ host\r\n",
+                RTZ_PUBLIC_IPV6, RTZ_PUBLIC_MEDIA_PORT);
+        }
         sbuf_appendf(
             sdp,
             "a=candidate:1 1 udp 2013266431 %s %d typ host\r\n"
             "a=end-of-candidates\r\n",
             RTZ_PUBLIC_IP, RTZ_PUBLIC_MEDIA_PORT);
-
+    }
     return sdp;
 }
 sbuf_t *create_answer_sdp(rtz_handle_t *handle, const char *offer_sdp, int tcp)
@@ -1112,12 +1133,22 @@ sbuf_t *create_answer_sdp(rtz_handle_t *handle, const char *offer_sdp, int tcp)
         RTZ_PUBLIC_IP, user, pwd, fingerprint,
         audio_ssrc, audio_ssrc, audio_ssrc, audio_ssrc);
     if (tcp) {
+        if (RTZ_PUBLIC_IPV6) {
+            sbuf_appendf(sdp,
+                "a=candidate:1 1 tcp 2013266431 %s %d typ host tcptype passive\r\n",
+                RTZ_PUBLIC_IPV6, RTZ_PUBLIC_MEDIA_PORT);
+        }
         sbuf_appendf(
             sdp,
             "a=candidate:1 1 tcp 2013266431 %s %d typ host tcptype passive\r\n"
             "a=end-of-candidates\r\n",
             RTZ_PUBLIC_IP, RTZ_PUBLIC_MEDIA_PORT);
     } else {
+        if (RTZ_PUBLIC_IPV6) {
+            sbuf_appendf(sdp,
+                "a=candidate:1 1 udp 2013266431 %s %d typ host\r\n",
+                RTZ_PUBLIC_IPV6, RTZ_PUBLIC_MEDIA_PORT);
+        }
         sbuf_appendf(
             sdp,
             "a=candidate:1 1 udp 2013266431 %s %d typ host\r\n"
@@ -1458,8 +1489,9 @@ void rtz_hangup(void *rtz_handle)
     LLOG(LL_WARN, "rtz_hangup %p ice_agent=%p", rtz_handle, handle->ice);
     if (handle->ice) {
         //LLOG(LL_WARN, "defer del ice_agent %p", handle->ice);
-        zl_defer(handle->session->srv->loop, ice_agent_defer_del, 0, handle->ice);
+        ice_agent_t *ice = handle->ice;
         handle->ice = NULL;
+        zl_defer(handle->session->srv->loop, ice_agent_defer_del, 0, ice);
     }
 }
 
@@ -1552,10 +1584,10 @@ void rtz_server_kick_stream(rtz_server_t *srv, const char *tc_url, const char *s
 /* Write 12 bit min_playout_delay and 12 bit max_playout_delay in 10ms granularity */
 static inline void update_playout_delay_ext(uint8_t *ext, uint16_t min_delay)
 {
-    uint16_t d = min_delay / 10;
-    ext[1] = (d >> 4) & 0xff;
-    ext[2] = ((d << 4) & 0xf0) | ((d >> 8) & 0x0f);
-    ext[3] = (d & 0xff);
+    min_delay /= 10;
+    ext[1] = (min_delay >> 4) & 0xff;
+    ext[2] = ((min_delay << 4) & 0xf0) | ((min_delay >> 8) & 0x0f);
+    ext[3] = (min_delay & 0xff);
 }
 
 void rtp_mux_handler(int video, int kf, void *data, int size, void *udata)
@@ -1578,7 +1610,7 @@ void rtp_mux_handler(int video, int kf, void *data, int size, void *udata)
         if (playout_delay_ext_ref) {
             const uint16_t frame_time = stream->sframe_time ?: 40;
             update_playout_delay_ext(playout_delay_ext_ref,
-                                     frame_time * handle->min_playout_delay);
+                                     600/*frame_time * handle->min_playout_delay*/);
             ice_prepare_video_keyframe(handle->ice);
         }
         send_rtp(handle, video, data, size);

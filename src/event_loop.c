@@ -171,6 +171,10 @@ int zl_poll(zl_loop_t *loop, int timeout)
 
 int zl_fd_ctl(zl_loop_t *loop, int op, int fd, uint32_t events, zl_fd_event_cb func, void *udata)
 {
+    if (fd < 0) {
+        LLOG(LL_FATAL, "fd %d invalid", fd);
+        return -1;
+    }
     if (fd >= loop->setsize) {
         LLOG(LL_FATAL, "fd %d larger than pollset size %d", fd, loop->setsize);
         return -1;

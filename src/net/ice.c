@@ -1,4 +1,4 @@
-#include "ice.h"
+﻿#include "ice.h"
 #include "sbuf.h"
 #include "event_loop.h"
 #include "tcp_chan.h"
@@ -898,7 +898,7 @@ void ice_send_packet(ice_agent_t *agent, ice_queued_packet_t *pkt)
         } else {
             int plen = pkt->length;
             int res = srtp_protect_rtcp(component->dtls->srtp_out, pkt->data, &plen);
-            //LLOG(LL_TRACE, "encrypt %d -> %d", pkt->length, protected);
+            //LLOG(LL_TRACE, "encrypt %d -> %d", pkt->length, plen);
             if (res != srtp_err_status_ok) {
                 /* We don't spam the logs for every SRTP error: just take note of this, and print a summary later */
                 //handle->srtp_errors_count++;

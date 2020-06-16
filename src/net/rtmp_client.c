@@ -1406,7 +1406,7 @@ void metadata_handler(rtmp_client_t *peer, const char *data, int size)
     } else {
         return;
     }
-
+    //LLOG(LL_TRACE, "metadata_handler");
     sbuf_t *name = sbuf_new();
     sbuf_t *codec_name = sbuf_new();
     double num = 0.0;
@@ -1453,13 +1453,13 @@ void metadata_handler(rtmp_client_t *peer, const char *data, int size)
             } else if (p[0] == AMF0_TYPE_NUMBER) {
                 p += amf0_read_number(p, pend - p, &num);
                 i = lroundl(num);
-                //LLOG(LL_TRACE, "audiocodecid=%d", i);
                 if (i == FLV_AUDIO_CODEC_PCMA)
                     peer->acodec->type = AUDIO_CODEC_PCMA;
                 else if (i == FLV_AUDIO_CODEC_PCMU)
                     peer->acodec->type = AUDIO_CODEC_PCMU;
                 else if (i == FLV_AUDIO_CODEC_AAC)
                     peer->acodec->type = AUDIO_CODEC_AAC;
+                //LLOG(LL_TRACE, "audiocodecid=%d acodec_type=%d", i, peer->acodec->type);
             }
         } else if (!strcmp(name->data, "audiosamplerate")) {
             if (p[0] == AMF0_TYPE_NUMBER) {

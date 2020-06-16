@@ -35,6 +35,7 @@
 
 const char *ZK_HOST = NULL;
 const char *RTZ_PUBLIC_IP = NULL;
+const char *RTZ_PUBLIC_IPV6 = NULL;
 const char *RTZ_LOCAL_IP = NULL;
 int RTZ_PUBLIC_SIGNAL_PORT = 443;
 int RTZ_LOCAL_SIGNAL_PORT = 443;
@@ -104,6 +105,7 @@ int main(int argc, char *argv[])
     ZK_HOST = cfg_get_text(cfg, "ZK_HOST", NULL);
     RTZ_LOCAL_IP = cfg_get_text(cfg, "RTZ_LOCAL_IP", "127.0.0.1");
     RTZ_PUBLIC_IP = cfg_get_text(cfg, "RTZ_PUBLIC_IP", RTZ_LOCAL_IP);
+    RTZ_PUBLIC_IPV6 = cfg_get_text(cfg, "RTZ_PUBLIC_IPV6", NULL);
     RTZ_LOCAL_SIGNAL_PORT = cfg_get_int(cfg, "RTZ_LOCAL_SIGNAL_PORT", 443);
     RTZ_LOCAL_HLS_PORT = cfg_get_int(cfg, "RTZ_LOCAL_HLS_PORT", 8086);
     RTZ_PUBLIC_HLS_PORT = cfg_get_int(cfg, "RTZ_PUBLIC_HLS_PORT", RTZ_LOCAL_HLS_PORT);
@@ -145,6 +147,7 @@ int main(int argc, char *argv[])
 
     LLOG(LL_INFO, "RTZ_SHARDS=%d", RTZ_SHARDS);
     LLOG(LL_INFO, "ZK_HOST=%s", ZK_HOST);
+    LLOG(LL_INFO, "RTZ_PUBLIC_IPV6=%s", RTZ_PUBLIC_IPV6 ?: "<disabled>");
     LLOG(LL_INFO, "RTZ_LOCAL_IP:SIGNAL_PORT,MEDIA_PORT,RTMP_PORT,HLS_PORT,MONITOR_PORT=%s:%d,%d,%d,%d,%d",
          RTZ_LOCAL_IP, RTZ_LOCAL_SIGNAL_PORT, RTZ_LOCAL_MEDIA_PORT, RTMP_LOCAL_PORT, RTZ_LOCAL_HLS_PORT, RTZ_MONITOR_PORT);
     LLOG(LL_INFO, "RTZ_PUBLIC_IP:SIGNAL_PORT,MEDIA_PORT,RTMP_PORT,HLS_PORT=%s:%d,%d,%d,%d",
@@ -163,10 +166,10 @@ int main(int argc, char *argv[])
     SSL_library_init();
     SSL_load_error_strings();
     OpenSSL_add_all_algorithms();
-    dtls_srtp_init(CERT_PEM, CERT_KEY, CERT_PWD);
 #if WITH_WSS
     tcp_ssl_init(CERT_PEM, CERT_KEY, CERT_PWD);
 #endif
+    dtls_srtp_init(CERT_PEM, CERT_KEY, CERT_PWD);
 
 	zl_loop_t *main_loop = zl_loop_new(4096);
     zl_loop_set_ct(main_loop);
@@ -210,6 +213,7 @@ int main(int argc, char *argv[])
     dtls_srtp_cleanup();
     EVP_cleanup();
     ERR_free_strings();
+    OPENSSL_cleanup();
 
     llog_cleanup();
 	return 0;
