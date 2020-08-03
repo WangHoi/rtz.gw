@@ -44,10 +44,12 @@ load： 负载信息，流媒体服务器的推流和取流路数
 
 extern const char *ZK_HOST;
 extern const char *RTZ_PUBLIC_IP;
-extern const char* RTZ_PUBLIC_IPV6;
+extern const char *RTZ_PUBLIC_IPV6;
+extern const char *RTZ_PROXY_MEDIA_IP;
 extern const char *RTZ_LOCAL_IP;
 extern int RTZ_PUBLIC_SIGNAL_PORT;
 extern int RTZ_PUBLIC_HLS_PORT;
+extern int RTZ_PROXY_MEDIA_PORT;
 extern int RTMP_PUBLIC_PORT;
 extern int RTMP_LOCAL_PORT;
 extern const char *ORIGIN_HOST;
@@ -131,16 +133,18 @@ void zk_mkdir(zhandle_t *handle, const char *service_name, sbuf_t *real_path,
     if (RTZ_PUBLIC_IPV6) {
         snprintf(text, sizeof(text), "{"
             "\"public_host\": \"%s:%d\","
-            "\"Ipv6_public_host\": \"[%s]:%d\","
+            "\"ipv6_public_host\": \"[%s]:%d\","
+            "\"proxy_public_host\": \"%s:%d\","
             "\"local_host\": \"%s:%d\","
             "\"public_replay_host\": \"%s:%d\","
-            "\"Ipv6_public_replay_host\": \"[%s]:%d\","
+            "\"ipv6_public_replay_host\": \"[%s]:%d\","
             "\"origin_host\":\"%s\","
             "\"mode\":2,"
             "\"load\": %d"
             "}",
             public_ip, public_port,
             RTZ_PUBLIC_IPV6, public_port,
+            RTZ_PROXY_MEDIA_IP, RTZ_PROXY_MEDIA_PORT,
             local_ip, local_port,
             public_ip, public_replay_port,
             RTZ_PUBLIC_IPV6, public_replay_port,
@@ -149,6 +153,7 @@ void zk_mkdir(zhandle_t *handle, const char *service_name, sbuf_t *real_path,
     } else {
         snprintf(text, sizeof(text), "{"
             "\"public_host\": \"%s:%d\","
+            "\"proxy_public_host\": \"%s:%d\","
             "\"local_host\": \"%s:%d\","
             "\"public_replay_host\": \"%s:%d\","
             "\"origin_host\":\"%s\","
@@ -156,6 +161,7 @@ void zk_mkdir(zhandle_t *handle, const char *service_name, sbuf_t *real_path,
             "\"load\": %d"
             "}",
             public_ip, public_port,
+            RTZ_PROXY_MEDIA_IP, RTZ_PROXY_MEDIA_PORT,
             local_ip, local_port,
             public_ip, public_replay_port,
             ORIGIN_HOST,
@@ -197,15 +203,17 @@ void zk_update(zhandle_t *handle, const char *real_path,
     if (RTZ_PUBLIC_IPV6) {
         snprintf(text, sizeof(text), "{"
             "\"public_host\": \"%s:%d\","
-            "\"Ipv6_public_host\": \"[%s]:%d\","
+            "\"ipv6_public_host\": \"[%s]:%d\","
+            "\"proxy_public_host\": \"%s:%d\","
             "\"local_host\": \"%s:%d\","
             "\"public_replay_host\":\"%s:%d\","
-            "\"Ipv6_public_replay_host\":\"[%s]:%d\","
+            "\"ipv6_public_replay_host\":\"[%s]:%d\","
             "\"origin_host\":\"%s\","
             "\"mode\":2,"
             "\"load\": %d}",
             public_ip, public_port,
             RTZ_PUBLIC_IPV6, public_port,
+            RTZ_PROXY_MEDIA_IP, RTZ_PROXY_MEDIA_PORT,
             local_ip, local_port,
             public_ip, public_replay_port,
             RTZ_PUBLIC_IPV6, public_replay_port,
@@ -214,12 +222,14 @@ void zk_update(zhandle_t *handle, const char *real_path,
     } else {
         snprintf(text, sizeof(text), "{"
             "\"public_host\": \"%s:%d\","
+            "\"proxy_public_host\": \"%s:%d\","
             "\"local_host\": \"%s:%d\","
             "\"public_replay_host\":\"%s:%d\","
             "\"origin_host\":\"%s\","
             "\"mode\":2,"
             "\"load\": %d}",
             public_ip, public_port,
+            RTZ_PROXY_MEDIA_IP, RTZ_PROXY_MEDIA_PORT,
             local_ip, local_port,
             public_ip, public_replay_port,
             ORIGIN_HOST,

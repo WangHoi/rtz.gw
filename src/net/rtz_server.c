@@ -39,9 +39,11 @@
 extern const char *RTZ_LOCAL_IP;
 extern const char *RTZ_PUBLIC_IP;
 extern const char *RTZ_PUBLIC_IPV6;
+extern const char *RTZ_PROXY_MEDIA_IP;
 extern const char *ORIGIN_HOST;
 extern int RTZ_PUBLIC_MEDIA_PORT;
 extern int RTZ_LOCAL_MEDIA_PORT;
+extern int RTZ_PROXY_MEDIA_PORT;
 extern const char *ZK_HOST;
 
 #define MAX_PLAYOUT_DELAY_FRAMES 50
@@ -128,7 +130,6 @@ struct http_peer_t {
     int flag;
     int upgraded;
     struct list_head req_list;
-
     sbuf_t *url_path;
 
     struct list_head link;
@@ -210,7 +211,7 @@ static void process_sdp_answer(http_peer_t *peer, const char *transaction,
     const char *session_id, const char *handle_id, const char *sdp);
 static void send_rtp(rtz_handle_t *handle, int video, const void *data, int size);
 static void rtp_mux_handler(int video, int kf, void *data, int size, void *udata);
-static sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp);
+static sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp, int need_sdp);
 static sbuf_t *create_answer_sdp(rtz_handle_t *handle, const char *offer_sdp, int tcp);
 static void rtz_handle_del(rtz_handle_t *handle);
 static void rtz_session_del(rtz_session_t *session);
@@ -357,6 +358,7 @@ void http_request_handler(http_peer_t *peer, http_request_t *req)
     }
 
     sbuf_strcpy(peer->url_path, req->path);
+    LLOG(LL_TRACE, "path: %s", peer->url_path->data);
     const char *key = http_get_header(&req->header_list, "Sec-WebSocket-Key");
     if (key) {
         //LLOG(LL_TRACE, "upgrade to websocket");
@@ -751,6 +753,27 @@ void parse_url(rtz_handle_t *h, const char *url)
          url, h->app->data, h->tc_url->data, h->stream_name->data);
 }
 
+static int check_proxy(const char *s)
+{
+    const char *p1 = strstr(s, "videoServer=");
+    if (!p1)
+        return 0;
+    p1 += 12;
+    const char *p2 = p1;
+    while (*p2 && *p2 != '#' && *p2 != '&' && *p2 != ':')
+        ++p2;
+    if (p2 - p1 >= 127)
+        return 0;
+    char ip[128];
+    memcpy(ip, p1, p2 - p1);
+    ip[p2 - p1] = 0;
+    if (strcmp(ip, RTZ_PUBLIC_IP) == 0)
+        return 0;
+    if (RTZ_PUBLIC_IPV6 && strcmp(ip, RTZ_PUBLIC_IPV6) == 0)
+        return 0;
+    return 1;
+}
+
 void create_streaming_handle(http_peer_t *peer, const char *transaction, const char *session_id,
                    const char *url, int url_redirect, const char *transport, uint16_t min_playout_delay)
 {
@@ -826,7 +849,8 @@ void create_streaming_handle(http_peer_t *peer, const char *transaction, const c
         sbuf_del(origin_url);
     }
 
-    sbuf_t *offer_sdp = create_offer_sdp(handle, tcp);
+    int need_proxy = check_proxy(peer->url_path->data);
+    sbuf_t *offer_sdp = create_offer_sdp(handle, tcp, need_proxy);
     handle->flag = RTZ_HANDLE_PREPARING;
 
     LLOG(LL_TRACE, "create_streaming_handle %p sid='%s' hid='%s'",
@@ -971,7 +995,7 @@ void handle_message(http_peer_t *peer, const char *transaction,
         //stop_stream(peer, transaction, session_id, handle_id);
     }
 }
-sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp)
+sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp, int need_proxy)
 {
     ice_agent_t *agent = handle->ice;
     const char *user = ice_get_luser(agent);
@@ -979,6 +1003,8 @@ sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp)
     const char *fingerprint = dtls_get_local_fingerprint();
     uint32_t audio_ssrc = ice_get_ssrc(agent, 0);
     uint32_t video_ssrc = ice_get_ssrc(agent, 1);
+    const char *public_ip = need_proxy ? RTZ_PROXY_MEDIA_IP : RTZ_PUBLIC_IP;
+    int public_port = need_proxy ? RTZ_PROXY_MEDIA_PORT : RTZ_PUBLIC_MEDIA_PORT;
 
     sbuf_t *sdp = sbuf_newf(
         "v=0\r\n"
@@ -989,7 +1015,7 @@ sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp)
         "a=msid-semantic: WMS rtz\r\n"
         "a=ice-lite\r\n",
         ++handle->sdp_version,
-        RTZ_PUBLIC_IP, handle->stream_name->data);
+        public_ip, handle->stream_name->data);
 
     ice_flags_set(agent, ICE_HANDLE_WEBRTC_HAS_AUDIO);
     sbuf_appendf(
@@ -1011,10 +1037,10 @@ sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp)
         "a=ssrc:%"SCNu32" msid:rtz rtza0\r\n"
         "a=ssrc:%"SCNu32" mslabel:rtz\r\n"
         "a=ssrc:%"SCNu32" label:rtza0\r\n",
-        RTZ_PUBLIC_IP, user, pwd, fingerprint,
+        public_ip, user, pwd, fingerprint,
         audio_ssrc, audio_ssrc, audio_ssrc, audio_ssrc);
     if (tcp) {
-        if (RTZ_PUBLIC_IPV6) {
+        if (!need_proxy && RTZ_PUBLIC_IPV6) {
             sbuf_appendf(sdp,
                 "a=candidate:1 1 tcp 2013266431 %s %d typ host tcptype passive\r\n",
                 RTZ_PUBLIC_IPV6, RTZ_PUBLIC_MEDIA_PORT);
@@ -1022,9 +1048,9 @@ sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp)
         sbuf_appendf(sdp,
             "a=candidate:1 1 tcp 2013266431 %s %d typ host tcptype passive\r\n"
             "a=end-of-candidates\r\n",
-            RTZ_PUBLIC_IP, RTZ_PUBLIC_MEDIA_PORT);
+            public_ip, public_port);
     } else {
-        if (RTZ_PUBLIC_IPV6) {
+        if (!need_proxy && RTZ_PUBLIC_IPV6) {
             sbuf_appendf(sdp,
                 "a=candidate:1 1 udp 2013266431 %s %d typ host\r\n",
                 RTZ_PUBLIC_IPV6, RTZ_PUBLIC_MEDIA_PORT);
@@ -1032,7 +1058,7 @@ sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp)
         sbuf_appendf(sdp,
             "a=candidate:1 1 udp 2013266431 %s %d typ host\r\n"
             "a=end-of-candidates\r\n",
-            RTZ_PUBLIC_IP, RTZ_PUBLIC_MEDIA_PORT);
+            public_ip, public_port);
     }
 
     ice_flags_set(agent, ICE_HANDLE_WEBRTC_HAS_VIDEO);
@@ -1059,14 +1085,14 @@ sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp)
         "a=ssrc:%"SCNu32" msid:rtz rtzv0\r\n"
         "a=ssrc:%"SCNu32" mslabel:rtz\r\n"
         "a=ssrc:%"SCNu32" label:rtzv0\r\n",
-        RTZ_PUBLIC_IP, user, pwd, fingerprint,
+        public_ip, user, pwd, fingerprint,
         video_ssrc, video_ssrc, video_ssrc, video_ssrc);
     sbuf_appendf(
         sdp,
         "a=extmap:6 %s\r\n",
         RTZ_RTP_EXTMAP_PLAYOUT_DELAY);
     if (tcp) {
-        if (RTZ_PUBLIC_IPV6) {
+        if (!need_proxy && RTZ_PUBLIC_IPV6) {
             sbuf_appendf(sdp,
                 "a=candidate:1 1 tcp 2013266431 %s %d typ host tcptype passive\r\n",
                 RTZ_PUBLIC_IPV6, RTZ_PUBLIC_MEDIA_PORT);
@@ -1075,9 +1101,9 @@ sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp)
             sdp,
             "a=candidate:1 1 tcp 2013266431 %s %d typ host tcptype passive\r\n"
             "a=end-of-candidates\r\n",
-            RTZ_PUBLIC_IP, RTZ_PUBLIC_MEDIA_PORT);
+            public_ip, public_port);
     } else {
-        if (RTZ_PUBLIC_IPV6) {
+        if (!need_proxy && RTZ_PUBLIC_IPV6) {
             sbuf_appendf(sdp,
                 "a=candidate:1 1 udp 2013266431 %s %d typ host\r\n",
                 RTZ_PUBLIC_IPV6, RTZ_PUBLIC_MEDIA_PORT);
@@ -1086,7 +1112,7 @@ sbuf_t *create_offer_sdp(rtz_handle_t *handle, int tcp)
             sdp,
             "a=candidate:1 1 udp 2013266431 %s %d typ host\r\n"
             "a=end-of-candidates\r\n",
-            RTZ_PUBLIC_IP, RTZ_PUBLIC_MEDIA_PORT);
+            public_ip, public_port);
     }
     return sdp;
 }

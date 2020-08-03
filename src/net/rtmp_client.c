@@ -1028,8 +1028,8 @@ void send_ping(rtmp_client_t *client)
     uint32_t now = (uint32_t)(zl_time() / 1000);
     rtmp_write_ping(&now, sizeof(uint32_t), rtmp_write_handler, client->chan);
 }
-void rtmp_client_send_audio_pcma(rtmp_client_t *client, uint32_t orig_timestamp,
-    const char *data, int size)
+void rtmp_client_send_audio_pcma(rtmp_client_t *client,
+    uint32_t orig_timestamp, const char *data, int size)
 {
     if (!client->chan)
         return;

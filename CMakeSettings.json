@@ -1,10 +1,10 @@
 ﻿{
   "configurations": [
     {
-      "name": "Linux",
+      "name": "Linux-GCC-Debug",
       "generator": "Unix Makefiles",
       "remoteMachineName": "568082661;172.16.3.102 (username=root, port=22, authentication=Password)",
-      "configurationType": "RelWithDebInfo",
+      "configurationType": "Debug",
       "remoteCMakeListsRoot": "/var/tmp/src/${workspaceHash}/${name}",
       "cmakeExecutable": "/usr/local/bin/cmake",
       "buildRoot": "${env.USERPROFILE}\\CMakeBuilds\\${workspaceHash}\\build\\${name}",
@@ -25,6 +25,27 @@
       "variables": [],
       "intelliSenseMode": "linux-gcc-x64",
       "addressSanitizerEnabled": false
+    },
+    {
+      "name": "Linux-GCC-Release",
+      "generator": "Unix Makefiles",
+      "configurationType": "RelWithDebInfo",
+      "cmakeExecutable": "/usr/local/bin/cmake",
+      "remoteCopySourcesExclusionList": [ ".vs", ".git", "out" ],
+      "cmakeCommandArgs": "-DWITH_ASAN=OFF -DWITH_TSAN=OFF -DWITH_TCMALLOC=OFF -DWITH_HTTP_HOOKS=ON -DWITH_ZOOKEEPER=ON -DWITH_SYSTEMD=ON -DWITH_WSS=OFF",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "linux_x64" ],
+      "remoteMachineName": "568082661;172.16.3.102 (username=root, port=22, authentication=Password)",
+      "remoteCMakeListsRoot": "$HOME/.vs/${projectDirName}/${workspaceHash}/src",
+      "remoteBuildRoot": "$HOME/.vs/${projectDirName}/${workspaceHash}/out/build/${name}",
+      "remoteInstallRoot": "$HOME/.vs/${projectDirName}/${workspaceHash}/out/install/${name}",
+      "remoteCopySources": true,
+      "rsyncCommandArgs": "-t --delete --delete-excluded",
+      "remoteCopyBuildOutput": false,
+      "remoteCopySourcesMethod": "rsync",
+      "addressSanitizerRuntimeFlags": "detect_leaks=0",
+      "variables": []
     }
   ]
 }

@@ -36,6 +36,7 @@
 const char *ZK_HOST = NULL;
 const char *RTZ_PUBLIC_IP = NULL;
 const char *RTZ_PUBLIC_IPV6 = NULL;
+const char *RTZ_PROXY_MEDIA_IP = NULL;
 const char *RTZ_LOCAL_IP = NULL;
 int RTZ_PUBLIC_SIGNAL_PORT = 443;
 int RTZ_LOCAL_SIGNAL_PORT = 443;
@@ -46,6 +47,7 @@ int RTZ_LOCAL_MEDIA_PORT = 6000; /* rtmp push */
 int RTMP_PUBLIC_PORT = 1935;
 int RTMP_LOCAL_PORT = 1935;
 int RTZ_MONITOR_PORT = 1985;
+int RTZ_PROXY_MEDIA_PORT = 6000;
 const char *CERT_PEM = NULL;
 const char *CERT_KEY = NULL;
 const char *ORIGIN_HOST = NULL;
@@ -85,6 +87,7 @@ int main(int argc, char *argv[])
     int sfd;
     sigemptyset(&mask);
     sigaddset(&mask, SIGPIPE);
+    /*
     sigaddset(&mask, SIGINT);
     sigaddset(&mask, SIGTERM);
     sigaddset(&mask, SIGTTIN);
@@ -93,6 +96,7 @@ int main(int argc, char *argv[])
     sigaddset(&mask, SIGURG);
     sigaddset(&mask, SIGIO);
     sigaddset(&mask, SIGHUP);
+    */
     sigprocmask(SIG_BLOCK, &mask, NULL);
 
     install_crash_handler();
@@ -105,6 +109,7 @@ int main(int argc, char *argv[])
     ZK_HOST = cfg_get_text(cfg, "ZK_HOST", NULL);
     RTZ_LOCAL_IP = cfg_get_text(cfg, "RTZ_LOCAL_IP", "127.0.0.1");
     RTZ_PUBLIC_IP = cfg_get_text(cfg, "RTZ_PUBLIC_IP", RTZ_LOCAL_IP);
+    RTZ_PROXY_MEDIA_IP = cfg_get_text(cfg, "RTZ_PROXY_MEDIA_IP", RTZ_PUBLIC_IP);
     RTZ_PUBLIC_IPV6 = cfg_get_text(cfg, "RTZ_PUBLIC_IPV6", NULL);
     RTZ_LOCAL_SIGNAL_PORT = cfg_get_int(cfg, "RTZ_LOCAL_SIGNAL_PORT", 443);
     RTZ_LOCAL_HLS_PORT = cfg_get_int(cfg, "RTZ_LOCAL_HLS_PORT", 8086);
@@ -112,6 +117,7 @@ int main(int argc, char *argv[])
     RTZ_PUBLIC_SIGNAL_PORT = cfg_get_int(cfg, "RTZ_PUBLIC_SIGNAL_PORT", RTZ_LOCAL_SIGNAL_PORT);
     RTZ_LOCAL_MEDIA_PORT = cfg_get_int(cfg, "RTZ_LOCAL_MEDIA_PORT", 6000);
     RTZ_PUBLIC_MEDIA_PORT = cfg_get_int(cfg, "RTZ_PUBLIC_MEDIA_PORT", RTZ_LOCAL_MEDIA_PORT);
+    RTZ_PROXY_MEDIA_PORT = cfg_get_int(cfg, "RTZ_PROXY_MEDIA_PORT", RTZ_PUBLIC_MEDIA_PORT);
     RTMP_LOCAL_PORT = cfg_get_int(cfg, "RTMP_LOCAL_PORT", 1935);
     RTMP_PUBLIC_PORT = cfg_get_int(cfg, "RTMP_PUBLIC_PORT", RTMP_LOCAL_PORT);
     CERT_PEM = cfg_get_text(cfg, "CERT_PEM", "rtz.pem");
@@ -152,6 +158,7 @@ int main(int argc, char *argv[])
          RTZ_LOCAL_IP, RTZ_LOCAL_SIGNAL_PORT, RTZ_LOCAL_MEDIA_PORT, RTMP_LOCAL_PORT, RTZ_LOCAL_HLS_PORT, RTZ_MONITOR_PORT);
     LLOG(LL_INFO, "RTZ_PUBLIC_IP:SIGNAL_PORT,MEDIA_PORT,RTMP_PORT,HLS_PORT=%s:%d,%d,%d,%d",
          RTZ_PUBLIC_IP, RTZ_PUBLIC_SIGNAL_PORT, RTZ_PUBLIC_MEDIA_PORT, RTMP_PUBLIC_PORT, RTZ_PUBLIC_HLS_PORT);
+    LLOG(LL_INFO, "RTZ_PROXY_MEDIA_IP:MEDIA_PORT=%s:%d", RTZ_PROXY_MEDIA_IP, RTZ_PROXY_MEDIA_PORT);
     LLOG(LL_INFO, "CERT_PEM=%s", CERT_PEM);
     LLOG(LL_INFO, "CERT_KEY=%s", CERT_KEY);
     LLOG(LL_INFO, "ORIGIN_HOST=%s", ORIGIN_HOST);
@@ -173,13 +180,13 @@ int main(int argc, char *argv[])
 
 	zl_loop_t *main_loop = zl_loop_new(4096);
     zl_loop_set_ct(main_loop);
-
+    /*
     sigemptyset(&mask);
     sigaddset(&mask, SIGINT);
     sigaddset(&mask, SIGTERM);
     sfd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
     zl_fd_ctl(main_loop, EPOLL_CTL_ADD, sfd, EPOLLIN, signal_event_handler, main_loop);
-
+    */
     if (ZK_HOST)
         start_zk_registry(main_loop);
 
@@ -201,10 +208,10 @@ int main(int argc, char *argv[])
     } while (ts + 5000 > zl_timestamp());
 
     stop_watchdog();
-
+    /*
     zl_fd_ctl(main_loop, EPOLL_CTL_DEL, sfd, 0, NULL, NULL);
     close(sfd);
-
+    */
     zl_loop_del(main_loop);
 
 #if WITH_WSS
